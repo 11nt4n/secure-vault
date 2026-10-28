@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Production builds
+dist/
+frontend/dist/
+
+# Backend dynamic storage & uploads
+backend_php/storage/*
+!backend_php/storage/.gitkeep
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS & Editor files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
