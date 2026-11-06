@@ -639,11 +639,26 @@ class Database
         foreach ($this->data['encrypted_files'] as $f) {
             // Rows from the previous format did not have a status and are treated as completed.
             $status = $f['upload_status'] ?? 'completed';
-            if ($f['owner_id'] === $ownerId && ($includeIncomplete || $status === 'completed')) {
+            if ($f['owner_id'] === $ownerId && ($f['kind'] ?? 'file') === 'file'
+                && ($includeIncomplete || $status === 'completed')) {
                 $res[] = $f;
             }
         }
         return $res;
+    }
+
+    public function getFoldersByOwner(string $ownerId): array
+    {
+        return array_values(array_filter($this->data['encrypted_files'],
+            fn($entry) => $entry['owner_id'] === $ownerId && ($entry['kind'] ?? 'file') === 'folder'));
+    }
+
+    public function folderHasChildren(string $folderId, string $ownerId): bool
+    {
+        foreach ($this->data['encrypted_files'] as $entry) {
+            if ($entry['owner_id'] === $ownerId && ($entry['parent_folder_id'] ?? null) === $folderId) return true;
+        }
+        return false;
     }
 
     public function getChunksByFile(string $fileId): array

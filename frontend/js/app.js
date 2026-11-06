@@ -16,7 +16,7 @@ const modalRoot = $('#modal-root');
 const toastRoot = $('#toast-root');
 const CHUNK_SIZE = 5 * 1024 * 1024;
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
-const APP_BUILD = 'NATIVE-V2-Update:04.11.2026';
+const APP_BUILD = 'NATIVE-V3-Folders:06.11.2026';
 window.__SECURE_VAULT_BUILD__ = APP_BUILD;
 const BLOCKED_EXTENSIONS = new Set(['exe','dll','com','bat','cmd','ps1','vbs','js','jse','wsf','scr','msi','sh','php','phtml','jar','hta','apk']);
 const MAGIC = {
@@ -26,16 +26,18 @@ const MAGIC = {
 };
 
 const state = {
-  theme: localStorage.getItem('sv_theme_preference') || 'dark',
-  user: null, activeTab: 'files', unlocked: false,
+  theme: localStorage.getItem('sv_theme_preference') || 'light',
+  user: null, activeTab: 'files', unlocked: false, createMenuOpen: false, currentFolderId: null, pendingVaultAction: null,
   login: { register: false, username: '', password: '', email: '', mfaRequired: false, mfaSetupRequired: false, mfaToken: '', totpCode: '', mfaSecret: '', mfaOtpUri: '', secretCopied: false, loading: false, error: '', notice: '' },
-  files: [], decryptedFiles: [], filesLoading: false, filesError: '', search: '', selectedTag: null, sortBy: 'date', sortAsc: false,
+  files: [], decryptedFiles: [], folders: [], decryptedFolders: [], filesLoading: false, filesError: '', search: '', selectedTag: null, sortBy: 'date', sortAsc: false, dashboardView: 'home', fileLayout: 'grid',
   downloadingId: null, downloadProgress: 0, preview: null,
   audit: { logs: [], loading: false, verifying: false, action: 'ALL', status: 'ALL', integrity: null, error: '' },
   admin: { users: [], stats: null, loading: false, error: '', success: '' },
   modal: null, modalLoading: false, modalError: '', modalStage: '',
   vaultProfile: null, selectedFile: null, detailEditing: false, detailName: '', detailTags: '', detailSaving: false,
   upload: { file: null, tags: 'Rahasia, BSSN, Sertifikasi', uploading: false, progress: 0, currentChunk: 0, totalChunks: 0, status: '', error: '' },
+  folderForm: { name: '', loading: false, error: '' },
+  folderUpload: { uploading: false, current: '', completed: 0, total: 0, progress: 0, error: '' },
   passphrase: { newValue: '', confirm: '', loading: false, error: '', stage: '' },
   toastTimer: null, idleTimer: null
 };
@@ -83,7 +85,14 @@ function icon(name, size = 16) {
     archive: '<path d="M3 4h18v5H3zM5 9v11h14V9M10 13h4m-2-9v5"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
     arrow: '<path d="M5 12h14m-7-7 7 7-7 7"/>',
-    smartphone: '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/>'
+    smartphone: '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/>',
+    home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/><path d="M9 21v-7h6v7"/>',
+    grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    list: '<path d="M9 6h12M9 12h12M9 18h12M3 6h2M3 12h2M3 18h2"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/>',
+    folderPlus: '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/><path d="M12 11v6m-3-3h6"/>',
+    folderUpload: '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/><path d="m12 17 0-6m-3 3 3-3 3 3"/>'
   };
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.file}</svg>`;
 }
@@ -106,7 +115,7 @@ function resetIdleTimer() {
   state.idleTimer = setTimeout(() => {
     if (isVaultKeyLoaded()) {
       clearVaultKeys(); terminateCryptoWorker(); state.unlocked = false;
-      state.decryptedFiles = state.files;
+      state.decryptedFiles = state.files; state.decryptedFolders = state.folders;
       render();
       showToast('Brankas dikunci otomatis setelah 15 menit tidak aktif. Sesi akun tetap tersimpan.', 'error');
     }
@@ -114,7 +123,7 @@ function resetIdleTimer() {
 }
 
 function setAppHistory(view, tab = state.activeTab, replace = false, modal = null) {
-  const payload = { secureVaultApp: true, view, tab, modal };
+  const payload = { secureVaultApp: true, view, tab, modal, dashboardView: state.dashboardView, currentFolderId: state.currentFolderId };
   try {
     if (replace) history.replaceState(payload, '', location.pathname + location.search + location.hash);
     else history.pushState(payload, '', location.pathname + location.search + location.hash);
@@ -128,8 +137,12 @@ function handleAppPopState(event) {
     if (nav?.secureVaultApp && nav.view === 'app') {
       const changed = state.activeTab !== nav.tab;
       state.activeTab = ['files', 'audit', 'admin'].includes(nav.tab) && (nav.tab !== 'admin' || state.user.role === 'admin') ? nav.tab : 'files';
-      const allowedModals = ['unlock', 'upload', 'change-pass', 'details', 'preview'];
+      if (['home', 'files'].includes(nav.dashboardView)) state.dashboardView = nav.dashboardView;
+      state.currentFolderId = typeof nav.currentFolderId === 'string' && state.folders.some(folder => folder.id === nav.currentFolderId) ? nav.currentFolderId : null;
+      const allowedModals = ['unlock', 'upload', 'new-folder', 'folder-select', 'folder-upload', 'change-pass', 'details', 'preview'];
+      const previousModal = state.modal;
       state.modal = allowedModals.includes(nav.modal) ? nav.modal : null;
+      if (previousModal === 'unlock' && state.modal !== 'unlock') state.pendingVaultAction = null;
       if (state.modal === 'unlock' && !state.vaultProfile && !state.modalLoading) {
         state.modalLoading = true;
         request('/auth/vault-profile').then(profile => { state.vaultProfile = profile; state.modalLoading = false; render(); })
@@ -169,20 +182,37 @@ function headerTemplate() {
   const user = state.user;
   return `<header class="top-header"><div class="container header-inner">
     <div class="brand"><img src="./logo.png" alt="Secure Vault Logo"><div class="brand-text"><span class="brand-name">SECURE<span>VAULT</span></span><p class="brand-subtitle">Encrypted File Storage • Zero-Knowledge Architecture</p></div></div>
-    ${user ? `<nav class="main-nav">
-      <button class="btn btn-sm ${state.activeTab === 'files' ? 'btn-primary' : 'btn-secondary'}" data-action="tab" data-tab="files">${icon('database', 15)} Brankas Berkas</button>
-      <button class="btn btn-sm ${state.activeTab === 'audit' ? 'btn-primary' : 'btn-secondary'}" data-action="tab" data-tab="audit">${icon('file', 15)} Audit Trail (Hash-Chain)</button>
-      ${user.role === 'admin' ? `<button class="btn btn-sm ${state.activeTab === 'admin' ? 'btn-primary' : 'btn-secondary'}" data-action="tab" data-tab="admin">${icon('users', 15)} Konsol Admin</button>` : ''}
-    </nav>` : ''}
+    ${user ? `<span class="header-spacer"></span>` : ''}
     <div class="header-controls">
       <div class="theme-toggle" title="Ubah Tema Tampilan">
         ${['light','dark','system'].map((t, i) => `<button data-action="theme" data-theme="${t}" title="${['Tema Terang','Tema Gelap','Otomatis Sesuai Sistem'][i]}" class="${state.theme === t ? 'active' : ''}">${icon(['sun','moon','laptop'][i], 15)}</button>`).join('')}
       </div>
-      ${user ? `<div class="vault-status">${state.unlocked ? `<span class="badge badge-emerald">${icon('unlock', 13)} RAM Active</span>${btn('lock-vault', `${icon('lock',14)} Kunci`, 'btn-secondary btn-sm')}${btn('open-passphrase', `${icon('refresh',13)} Re-Wrap`, 'btn-outline btn-sm')}` : btn('open-unlock', `${icon('key',14)} Buka Brankas`, 'btn-primary btn-sm')}</div>
-      <div class="user-chip"><div class="user-avatar ${user.role === 'admin' ? 'admin' : ''}">${esc((user.username || '?').charAt(0).toUpperCase())}</div><div><b>${esc(user.username)}</b><small>${esc(String(user.role || 'user').toUpperCase())}</small></div></div>
+      ${user ? `<div class="user-chip"><div class="user-avatar ${user.role === 'admin' ? 'admin' : ''}">${esc((user.username || '?').charAt(0).toUpperCase())}</div><div><b>${esc(user.username)}</b><small>${esc(String(user.role || 'user').toUpperCase())}</small></div></div>
       ${btn('logout', icon('logout', 15), 'btn-danger btn-sm', 'title="Logout Sesi" aria-label="Logout"')}` : ''}
     </div>
   </div></header>`;
+}
+function sidebarTemplate() {
+  const total = state.files.reduce((sum, file) => sum + Number(file.file_size_bytes || 0), 0);
+  const quota = Number(state.user?.storageQuotaBytes) || 5 * 1024 ** 3;
+  const percent = Math.min(100, Math.round(total / quota * 100));
+  return `<aside class="drive-sidebar" aria-label="Navigasi utama">
+    <div class="drive-create-wrap"><button class="drive-new" type="button" data-action="create-menu" aria-haspopup="menu" aria-expanded="${state.createMenuOpen}">${icon('plus', 21)}<span>Baru</span></button><input id="folder-picker" type="file" webkitdirectory directory multiple hidden aria-label="Pilih folder untuk diunggah">
+      ${state.createMenuOpen ? `<div class="drive-create-menu" role="menu" aria-label="Buat baru">
+        <button type="button" role="menuitem" data-action="new-folder">${icon('folderPlus', 18)}<span>Folder baru</span></button>
+        <div class="drive-create-separator"></div>
+        <button type="button" role="menuitem" data-action="upload">${icon('upload', 18)}<span>Upload file</span></button>
+        <button type="button" role="menuitem" data-action="choose-folder">${icon('folderUpload', 18)}<span>Upload folder</span></button>
+      </div>` : ''}</div>
+    <nav class="drive-navigation" aria-label="Bagian aplikasi">
+      <button type="button" class="drive-nav-item ${state.activeTab === 'files' && state.dashboardView === 'home' ? 'active' : ''}" data-action="dashboard-view" data-view="home">${icon('home', 19)}<span>Beranda</span></button>
+      <button type="button" class="drive-nav-item ${state.activeTab === 'files' && state.dashboardView === 'files' ? 'active' : ''}" data-action="dashboard-view" data-view="files">${icon('database', 19)}<span>Brankas Saya</span></button>
+      <div class="drive-nav-divider"></div>
+      <button type="button" class="drive-nav-item ${state.activeTab === 'audit' ? 'active' : ''}" data-action="tab" data-tab="audit">${icon('shield', 19)}<span>Jejak Audit</span></button>
+      ${state.user.role === 'admin' ? `<button type="button" class="drive-nav-item ${state.activeTab === 'admin' ? 'active' : ''}" data-action="tab" data-tab="admin">${icon('users', 19)}<span>Konsol Admin</span></button>` : ''}
+    </nav>
+    <div class="drive-sidebar-bottom"><div class="drive-storage-label">${icon('database', 18)}<span>Penyimpanan</span></div><progress class="vault-progress storage-progress" max="100" value="${percent}" aria-label="Pemakaian kuota ${percent}%">${percent}%</progress><p>${bytes(total)} dari ${bytes(quota)} digunakan</p>${state.unlocked ? `<span class="drive-vault-state unlocked">${icon('unlock', 15)} Brankas terbuka</span>` : `<button type="button" class="drive-vault-state drive-vault-unlock" data-action="open-unlock" title="Buka kunci brankas">${icon('lock', 15)} Brankas terkunci</button>`}</div>
+  </aside>`;
 }
 function footerTemplate() {
   return `<footer class="institution-footer"><div class="container"><div><img src="./logo.png" alt="Secure Vault"><strong>SECURE VAULT</strong> • Zero-Knowledge Distributed Storage</div><small>Secure Vault • ISO/IEC 15408 dan ISO/IEC 18045 digunakan sebagai referensi desain keamanan.</small></div></footer>`;
@@ -204,16 +234,17 @@ function otpEnrollmentTemplate(login) {
       ${qrError ? `<small class="otp-qr-error">${esc(qrError)}</small>` : ''}
       <div class="otp-privacy-note">${icon('shield',14)} QR dibuat lokal di browser. Secret tidak dikirim ke layanan QR eksternal.</div>
     </div>
+    <div class="otp-manual-details" aria-label="Kode setup manual authenticator">
+      <strong class="otp-manual-title">${icon('key-round',15)} Kode setup manual</strong>
+      <p>Jika tidak bisa memindai QR, tambahkan akun secara manual di aplikasi authenticator.</p>
+      <div class="secret-row"><code>${esc(login.mfaSecret)}</code><button type="button" class="btn btn-secondary btn-sm" data-action="copy-secret">${icon(login.secretCopied ? 'check' : 'copy',14)} ${login.secretCopied ? 'Tersalin' : 'Salin kode'}</button></div>
+      <small>Jenis TOTP, issuer Secure Vault, akun ${esc(login.username)}, 6 digit, SHA-1, periode 30 detik. Jangan bagikan kode setup ini.</small>
+    </div>
     <div class="otp-enroll-instructions">
       <div class="otp-instruction"><span class="otp-instruction-number">1</span><div><strong>Buka authenticator</strong><p>Gunakan Google Authenticator, Microsoft Authenticator, Authy, 1Password, atau aplikasi TOTP lain.</p></div></div>
       <div class="otp-instruction"><span class="otp-instruction-number">2</span><div><strong>Pindai QR Code</strong><p>Pastikan akun Secure Vault berhasil ditambahkan. Format kode adalah TOTP 6 digit dengan rotasi setiap 30 detik.</p></div></div>
       <div class="otp-instruction"><span class="otp-instruction-number">3</span><div><strong>Masukkan kode verifikasi</strong><p>Ketik kode 6 digit yang sedang tampil pada aplikasi untuk menyelesaikan aktivasi.</p></div></div>
     </div>
-    <details class="otp-manual-details"><summary>${icon('key-round',15)} Tidak bisa memindai? Gunakan setup manual</summary>
-      <p>Tambahkan akun secara manual dengan jenis <strong>TOTP</strong>, issuer <strong>Secure Vault</strong>, nama akun <strong>${esc(login.username)}</strong>, 6 digit, SHA-1, periode 30 detik.</p>
-      <div class="secret-row"><code>${esc(login.mfaSecret)}</code><button type="button" class="btn btn-secondary btn-sm" data-action="copy-secret">${icon(login.secretCopied ? 'check' : 'copy',14)} ${login.secretCopied ? 'Tersalin' : 'Salin secret'}</button></div>
-      <small>Secret ini setara dengan kunci autentikasi. Simpan di tempat aman dan jangan bagikan kepada siapa pun.</small>
-    </details>
   </section>`;
 }
 function loginTemplate() {
@@ -231,7 +262,7 @@ function loginTemplate() {
       <div class="input-group"><label class="input-label">Username</label><input class="input-control" name="username" placeholder="Masukkan username" required autocomplete="username" value="${esc(l.username)}"></div>
       ${l.register ? `<div class="input-group"><label class="input-label">Email</label><input class="input-control" type="email" name="email" placeholder="nama@contoh.id" required autocomplete="email" value="${esc(l.email)}"></div>` : ''}
       <div class="input-group"><label class="input-label">Kata Sandi</label><input class="input-control" type="password" name="password" placeholder="Masukkan kata sandi" required ${l.register ? 'minlength="12" autocomplete="new-password"' : 'autocomplete="current-password"'}>${l.register ? '<p class="helper-text">Minimal 12 karakter. Gunakan kata sandi unik yang tidak dipakai di layanan lain.</p>' : ''}</div>
-      <button class="btn btn-primary btn-block" type="submit" ${l.loading ? 'disabled' : ''}>${l.loading ? 'Memproses...' : l.register ? 'Daftar Akun Baru' : 'Masuk & Lanjutkan MFA'} ${icon('arrow',16)}</button>
+      <button class="btn btn-primary btn-block" type="submit" ${l.loading ? 'disabled' : ''}>${l.loading ? 'Memproses...' : l.register ? 'Daftar Akun Baru' : 'Masuk'} ${icon('arrow',16)}</button>
       <div class="login-switch"><button type="button" data-action="toggle-register">${l.register ? 'Sudah memiliki akun? Masuk di sini' : 'Belum memiliki akun? Daftarkan akun baru'}</button></div>
     </form>`}</div></section>`;
 }
@@ -249,7 +280,8 @@ function fileIcon(name) {
 function visibleFiles() {
   const items = state.decryptedFiles.filter(file => {
     const name = (file.decryptedFileName || file.encrypted_file_name || '').toLowerCase();
-    return name.includes(state.search.toLowerCase()) && (!state.selectedTag || (file.tags || []).includes(state.selectedTag));
+    return (file.parent_folder_id || null) === state.currentFolderId
+      && name.includes(state.search.toLowerCase()) && (!state.selectedTag || (file.tags || []).includes(state.selectedTag));
   });
   items.sort((a,b) => {
     if (state.sortBy === 'date') { const d = new Date(b.created_at) - new Date(a.created_at); return state.sortAsc ? -d : d; }
@@ -258,23 +290,58 @@ function visibleFiles() {
   });
   return items;
 }
+function visibleFolders() {
+  return state.decryptedFolders.filter(folder => (folder.parent_folder_id || null) === state.currentFolderId
+    && (folder.decryptedFileName || folder.encrypted_file_name || '').toLowerCase().includes(state.search.toLowerCase()))
+    .sort((a,b) => (a.decryptedFileName || '').localeCompare(b.decryptedFileName || ''));
+}
+function folderBreadcrumbs() {
+  const crumbs = [];
+  const visited = new Set();
+  let id = state.currentFolderId;
+  while (id && crumbs.length < 20 && !visited.has(id)) {
+    visited.add(id);
+    const folder = state.decryptedFolders.find(entry => entry.id === id);
+    if (!folder) break;
+    crumbs.unshift(folder);
+    id = folder.parent_folder_id || null;
+  }
+  return crumbs;
+}
 function dashboardTemplate() {
-  const allTags = [...new Set(state.decryptedFiles.flatMap(f => f.tags || []))];
-  const total = state.files.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
-  const quota = Number(state.user?.storageQuotaBytes) || 5 * 1024 ** 3;
-  const percent = Math.min(100, Math.round(total / quota * 100));
+  const allTags = [...new Set(state.decryptedFiles.filter(f => (f.parent_folder_id || null) === state.currentFolderId).flatMap(f => f.tags || []))];
   const list = visibleFiles();
-  return `<div class="container page-container">
-    <div class="summary-grid dashboard-summary">
-      <div class="glass-card summary-card"><div class="summary-card-top"><span>Berkas dalam Brankas</span><span class="summary-icon cyan">${icon('file',18)}</span></div><div class="summary-number">${state.files.length} <small>berkas</small></div><p>Termasuk unggahan yang belum selesai</p></div>
-      <div class="glass-card summary-card"><div class="summary-card-top"><span>Alokasi Brankas Lokal</span><span class="summary-icon green">${icon('database',18)}</span></div><div class="storage-number">${(total/(1024*1024)).toFixed(1)} MB <small>/ ${(quota/(1024**3)).toFixed(1)} GB</small></div><progress class="vault-progress storage-progress" max="100" value="${percent}" aria-label="Pemakaian kuota ${percent}%">${percent}%</progress></div>
-      <div class="glass-card summary-card"><div class="summary-card-top"><span>Status Brankas di RAM</span><span class="summary-icon ${state.unlocked?'green':'amber'}">${icon('shield',18)}</span></div><div class="key-state">${state.unlocked ? `<span class="badge badge-emerald">${icon('unlock',14)} Terbuka di RAM</span>` : `<span class="badge badge-amber">${icon('lock',14)} Terkunci</span>`}</div><p>${state.unlocked ? 'Master Key aktif di RAM non-extractable. Siap dekripsi.' : 'Passphrase diperlukan untuk menurunkan KEK via Argon2id WASM.'}</p></div>
-    </div>
-    <div class="dashboard-toolbar"><div class="toolbar-left"><div class="search-wrap">${icon('search',16)}<input id="file-search" class="input-control" placeholder="Cari berkas berdasarkan nama..." value="${esc(state.search)}"></div><button class="btn btn-secondary btn-sm" data-action="sort-direction" title="Ganti Urutan (Ascending / Descending)">${icon('arrow',14)}</button><select id="sort-by" class="input-control sort-select"><option value="date" ${state.sortBy==='date'?'selected':''}>Urutkan: Tanggal</option><option value="name" ${state.sortBy==='name'?'selected':''}>Urutkan: Nama</option><option value="size" ${state.sortBy==='size'?'selected':''}>Urutkan: Ukuran</option></select>${btn('refresh-files',icon('refresh',14),'btn-secondary btn-sm','title="Refresh Daftar Berkas"')}</div><div class="toolbar-right">${!state.unlocked ? btn('open-unlock',`${icon('key',16)} Buka Kunci Brankas`,'btn-secondary') : ''}${btn('upload',`${icon('upload',16)} Unggah Berkas Baru`,'btn-primary')}</div></div>
+  const folderList = visibleFolders();
+  const breadcrumbs = folderBreadcrumbs();
+  const currentFolder = breadcrumbs[breadcrumbs.length - 1];
+  const title = currentFolder ? (state.unlocked ? currentFolder.decryptedFileName : 'Folder terenkripsi') : state.dashboardView === 'files' ? 'Brankas Saya' : 'Selamat datang di Secure Vault';
+  const folderCards = folderList.map(folder => {
+    const name = state.unlocked ? (folder.decryptedFileName || 'Folder') : 'Folder terenkripsi';
+    return `<div class="drive-folder-card"><button type="button" class="drive-folder-open" data-action="folder-open" data-id="${esc(folder.id)}" title="Buka ${esc(name)}">${icon('folder',21)}<span>${esc(name)}</span></button><button type="button" class="drive-folder-delete" data-action="delete-folder" data-id="${esc(folder.id)}" title="Hapus folder kosong" aria-label="Hapus ${esc(name)}" ${state.unlocked ? '' : 'disabled'}>${icon('trash',15)}</button></div>`;
+  }).join('');
+  const gridCards = list.map(file => {
+    const isBusy = state.downloadingId === file.id;
+    const unavailable = file.upload_status === 'uploading' || Boolean(file.deletion_pending);
+    const name = state.unlocked ? (file.decryptedFileName || file.encrypted_file_name) : 'Nama berkas terenkripsi';
+    return `<article class="drive-file-card"><div class="drive-file-card-head">${fileIcon(state.unlocked ? name : '')}<strong title="${esc(name)}">${esc(name)}</strong><button type="button" class="drive-card-more" data-action="file-details" data-id="${esc(file.id)}" title="Detail berkas" aria-label="Detail ${esc(name)}" ${unavailable ? 'disabled' : ''}>${icon('info',17)}</button></div><div class="drive-file-preview">${icon(state.unlocked ? 'file' : 'lock', 42)}<span>${state.unlocked ? esc((name.split('.').pop() || 'BERKAS').toUpperCase()) : 'TERENKRIPSI'}</span></div><div class="drive-file-card-foot"><small>${esc(dateText(file.created_at))} · ${bytes(file.file_size_bytes)}</small><div><button type="button" data-action="preview-file" data-id="${esc(file.id)}" title="Pratinjau" aria-label="Pratinjau ${esc(name)}" ${isBusy || unavailable ? 'disabled' : ''}>${icon('file',16)}</button><button type="button" data-action="download-file" data-id="${esc(file.id)}" title="Unduh" aria-label="Unduh ${esc(name)}" ${isBusy || unavailable ? 'disabled' : ''}>${isBusy ? `${state.downloadProgress}%` : icon('download',16)}</button></div></div></article>`;
+  }).join('');
+  const hasFilter = Boolean(state.search || state.selectedTag);
+  const emptyTitle = hasFilter ? 'Tidak ada berkas yang cocok' : currentFolder ? 'Folder masih kosong' : 'Brankas masih kosong';
+  const emptyCopy = hasFilter ? 'Coba kata pencarian atau filter lain.' : currentFolder ? 'Buat subfolder atau unggah berkas ke folder ini.' : 'Buat folder atau unggah berkas pertama Anda. Data dienkripsi sebelum disimpan.';
+  const emptyAction = hasFilter ? '' : btn(state.unlocked ? 'upload' : 'open-unlock', `${icon(state.unlocked ? 'plus' : 'key',16)} ${state.unlocked ? 'Unggah berkas' : 'Buka brankas'}`, 'btn-primary');
+  const emptyMarkup = `<div class="drive-grid-empty"><div class="drive-empty-art">${icon(hasFilter ? 'search' : 'file', 42)}</div><h3>${emptyTitle}</h3><p>${emptyCopy}</p>${emptyAction}</div>`;
+  return `<div class="container page-container drive-dashboard">
+    ${state.currentFolderId ? `<div class="drive-breadcrumbs"><button type="button" data-action="folder-root">${icon('home',15)} Brankas Saya</button>${breadcrumbs.map(folder => `<span>/</span><button type="button" data-action="folder-open" data-id="${esc(folder.id)}">${esc(state.unlocked ? folder.decryptedFileName : 'Folder terenkripsi')}</button>`).join('')}</div>` : ''}
+    <div class="drive-page-heading"><div><h1>${title}</h1><p>Berkas Anda dienkripsi di perangkat sebelum disimpan.</p></div>${state.unlocked ? `<div class="drive-vault-controls" aria-label="Kontrol brankas"><span class="badge badge-emerald">${icon('unlock', 13)} RAM Active</span>${btn('lock-vault', `${icon('lock',14)} Kunci`, 'btn-secondary btn-sm')}${btn('open-passphrase', `${icon('refresh',13)} Re-Wrap`, 'btn-outline btn-sm')}</div>` : ''}</div>
+    <div class="drive-search-row"><div class="search-wrap">${icon('search',20)}<input id="file-search" class="input-control" type="search" aria-label="Cari berkas" placeholder="Telusuri berkas di brankas" value="${esc(state.search)}"></div><button class="drive-refresh" type="button" data-action="refresh-files" title="Muat ulang berkas" aria-label="Muat ulang berkas">${icon('refresh',18)}</button></div>
+    <div class="drive-filter-row"><label class="drive-sort-label" for="sort-by">Urutkan</label><select id="sort-by" class="input-control sort-select"><option value="date" ${state.sortBy==='date'?'selected':''}>Tanggal</option><option value="name" ${state.sortBy==='name'?'selected':''}>Nama</option><option value="size" ${state.sortBy==='size'?'selected':''}>Ukuran</option></select><button class="drive-sort-direction" type="button" data-action="sort-direction" title="Balik urutan" aria-label="Balik urutan">${icon('arrow',16)}</button><span class="drive-filter-spacer"></span><span class="drive-file-count">${list.length} berkas</span><div class="drive-layout-toggle" role="group" aria-label="Tampilan berkas"><button type="button" data-action="file-layout" data-layout="list" class="${state.fileLayout === 'list' ? 'active' : ''}" title="Tampilan daftar" aria-label="Tampilan daftar" aria-pressed="${state.fileLayout === 'list'}">${icon('list',18)}</button><button type="button" data-action="file-layout" data-layout="grid" class="${state.fileLayout === 'grid' ? 'active' : ''}" title="Tampilan kartu" aria-label="Tampilan kartu" aria-pressed="${state.fileLayout === 'grid'}">${icon('grid',18)}</button></div></div>
     ${allTags.length ? `<div class="tag-filters"><span>Filter tag:</span><button class="badge ${state.selectedTag === null ? 'badge-cyan' : 'badge-muted'}" data-action="tag-filter" data-tag="">Semua</button>${allTags.map(tag => `<button class="badge ${state.selectedTag === tag ? 'badge-cyan' : 'badge-muted'}" data-action="tag-filter" data-tag="${esc(tag)}">#${esc(tag)}</button>`).join('')}</div>` : ''}
     ${alertTemplate(state.filesError)}
-    <div class="glass-card table-card"><div class="table-scroll"><table class="data-table files-table"><thead><tr><th>Nama Berkas</th><th>Ukuran</th><th>Potongan (Chunks)</th><th>Label / Tag</th><th>Tanggal Unggah</th><th class="text-right">Aksi</th></tr></thead><tbody>
-      ${state.filesLoading ? '<tr><td colspan="6" class="empty-state">Memuat daftar berkas terenkripsi...</td></tr>' : list.length === 0 ? `<tr><td colspan="6"><div class="empty-vault"><div class="empty-icon">${icon('file',30)}</div><h4>${state.files.length ? 'Tidak Ada Berkas yang Cocok' : 'Brankas Masih Kosong'}</h4><p>${state.files.length ? 'Coba ubah kata pencarian atau filter tag.' : 'Belum ada berkas terenkripsi yang diunggah ke brankas pribadi Anda.'}</p>${state.files.length ? '' : btn(state.unlocked ? 'upload' : 'open-unlock', `${icon('upload',14)} Unggah Berkas Pertama`, 'btn-primary btn-sm')}</div></td></tr>` : list.map(file => {
+    ${folderList.length ? `<div class="drive-section-heading"><h2>Folder</h2><span>${folderList.length} folder</span></div><div class="drive-folder-grid">${folderCards}</div>` : ''}
+    <div class="drive-section-heading"><h2>${state.currentFolderId ? 'Berkas dalam folder' : 'Berkas saya'}</h2><span>${state.unlocked ? 'Nama berkas didekripsi secara lokal' : 'Buka brankas untuk melihat nama berkas'}</span></div>
+    <div class="drive-grid-view ${state.fileLayout === 'grid' ? '' : 'drive-list-hidden'}">${state.filesLoading ? '<div class="drive-grid-message">Memuat berkas terenkripsi...</div>' : list.length ? `<div class="drive-file-grid">${gridCards}</div>` : folderList.length ? '<div class="drive-grid-message">Belum ada berkas di lokasi ini.</div>' : emptyMarkup}</div>
+    <div class="glass-card table-card ${state.fileLayout === 'grid' || (!list.length && folderList.length) ? 'drive-list-hidden' : ''}"><div class="table-scroll"><table class="data-table files-table"><thead><tr><th>Nama Berkas</th><th>Ukuran</th><th>Potongan (Chunks)</th><th>Label / Tag</th><th>Tanggal Unggah</th><th class="text-right">Aksi</th></tr></thead><tbody>
+      ${state.filesLoading ? '<tr><td colspan="6" class="empty-state">Memuat daftar berkas terenkripsi...</td></tr>' : list.length === 0 ? `<tr><td colspan="6"><div class="empty-vault"><div class="empty-icon">${icon('file',30)}</div><h4>${emptyTitle}</h4><p>${emptyCopy}</p>${emptyAction}</div></td></tr>` : list.map(file => {
         const isBusy = state.downloadingId === file.id;
         const filename = state.unlocked ? (file.decryptedFileName || file.encrypted_file_name) : '•••••••••••••••••••• (Terenkripsi)';
         const deleting = Boolean(file.deletion_pending);
@@ -283,13 +350,12 @@ function dashboardTemplate() {
         return `<tr><td><div class="file-name-cell"><div class="file-type-icon">${fileIcon(file.decryptedFileName || '')}</div><div><b>${esc(filename)}</b><small class="mono">ID: ${esc(file.id.substring(0, 8))}…</small></div></div></td><td>${(Number(file.file_size_bytes)/(1024*1024)).toFixed(2)} MB</td><td>${statusLabel}</td><td>${state.unlocked && file.tags?.length ? file.tags.map(tag=>`<span class="badge badge-emerald tag-badge">#${esc(tag)}</span>`).join(' ') : '<span class="muted">-</span>'}</td><td class="date-cell">${esc(dateText(file.created_at))}</td><td><div class="file-actions"><button class="btn btn-secondary btn-sm" data-action="preview-file" data-id="${esc(file.id)}" ${isBusy || incomplete || deleting?'disabled':''}>${icon('file',13)} Pratinjau</button><button class="btn btn-primary btn-sm" data-action="download-file" data-id="${esc(file.id)}" ${isBusy || incomplete || deleting?'disabled':''}>${isBusy ? `${state.downloadProgress}%` : `${icon('download',13)} Unduh`}</button><button class="btn btn-secondary btn-sm icon-btn" data-action="file-details" data-id="${esc(file.id)}" title="Spesifikasi Kriptografis" ${incomplete || deleting?'disabled':''}>${icon('info',14)}</button><button class="btn btn-danger btn-sm icon-btn" data-action="delete-file" data-id="${esc(file.id)}" title="${deleting?'Lanjutkan penghapusan':'Hapus Berkas'}">${icon('trash',14)}</button></div></td></tr>`;
       }).join('')}
     </tbody></table></div></div>
-    <div class="assurance-banner"><div>${icon('shield',23)}<div><strong>Acuan Pengembangan Keamanan</strong><p>Menggunakan prinsip ISO/IEC 15408 dan ISO/IEC 18045 sebagai referensi desain. Aplikasi ini belum dievaluasi atau disertifikasi Common Criteria.</p></div></div><div class="assurance-badges"><span class="badge badge-cyan">Envelope 3 Lapis</span><span class="badge badge-emerald">SHA-256 Hash Chain</span><span class="badge badge-amber">Zero-Knowledge</span></div></div>
   </div>`;
 }
 function auditTemplate() {
   const a = state.audit;
   const filtered = a.logs.filter(log => (a.action === 'ALL' || log.action_type === a.action) && (a.status === 'ALL' || log.status === a.status));
-  const actions = ['AUTH_LOGIN','AUTH_MFA_SUCCESS','VAULT_SETUP','FILE_INIT','FILE_CHUNK_UPLOAD','FILE_UPLOAD_COMPLETE','FILE_DOWNLOAD','FILE_DELETE_PENDING','FILE_DELETE','FILE_METADATA_UPDATE','FILE_UPLOAD_INTEGRITY_FAILURE','FILE_DOWNLOAD_INTEGRITY_FAILURE','VAULT_REWRAP_MK'];
+  const actions = ['AUTH_LOGIN','AUTH_MFA_SUCCESS','VAULT_SETUP','FOLDER_CREATE','FOLDER_DELETE','FILE_INIT','FILE_CHUNK_UPLOAD','FILE_UPLOAD_COMPLETE','FILE_DOWNLOAD','FILE_DELETE_PENDING','FILE_DELETE','FILE_METADATA_UPDATE','FILE_UPLOAD_INTEGRITY_FAILURE','FILE_DOWNLOAD_INTEGRITY_FAILURE','VAULT_REWRAP_MK'];
   return `<div class="container page-container"><div class="section-heading"><div><h2>Jejak Audit Berantai</h2><p>SHA-256 hash-chain • transaksi terpadu untuk operasi file yang didukung • checkpoint eksternal bertanda tangan</p></div><div>${btn('refresh-audit', `${icon('refresh',14)} Refresh`, 'btn-secondary btn-sm')}<button class="btn btn-primary btn-sm" data-action="verify-audit" ${a.verifying || !a.logs.length ? 'disabled' : ''}>${icon('shield',15)} ${a.verifying ? 'Memvalidasi Rantai...' : 'Uji Integritas Rantai (Hash-Chain)'}</button></div></div>
     ${a.integrity ? `<div class="integrity-banner ${a.integrity.verified?'valid':'invalid'}">${icon(a.integrity.verified?'check':'alert',24)}<div><strong>${a.integrity.verified?'Rantai Hash Konsisten':'Peringatan: Rantai Hash Tidak Konsisten'}</strong><p>${esc(a.integrity.message)}</p></div></div>` : ''}
     ${errorBox(a.error)}
@@ -328,6 +394,20 @@ function uploadModalTemplate() {
     ${u.uploading ? `<div class="upload-progress"><div class="progress-copy"><strong>${esc(u.status)}</strong><span>${u.progress}%</span></div><progress class="vault-progress upload-vault-progress" max="100" value="${u.progress}" aria-label="Progres unggah ${u.progress}%">${u.progress}%</progress><small>Setiap potongan 5 MB dienkripsi secara independen dengan kunci DEK acak dan tag AAD anti-penukaran.</small></div>` : '<div class="upload-note">Batas ukuran berkas: 500 MB (MVP). Berkas dienkripsi di peramban sebelum dikirim.</div>'}
     <div class="modal-actions"><button type="button" class="btn btn-secondary" data-action="close-modal" ${u.uploading?'disabled':''}>Batal</button><button type="button" class="btn btn-primary" data-action="start-upload" ${!u.file||u.uploading||!state.unlocked?'disabled':''}>${u.uploading?'Mengunggah...':`${icon('shield',15)} Enkripsi Sisi-Klien & Unggah`}</button></div>`, '640px');
 }
+function folderModalTemplate() {
+  const form = state.folderForm;
+  return modalShell('Folder baru', 'Nama folder dienkripsi di perangkat sebelum disimpan.',
+    `${errorBox(form.error)}<form data-form="create-folder" class="form-stack"><div class="input-group"><label class="input-label" for="folder-name">Nama folder</label><input id="folder-name" name="folderName" class="input-control" maxlength="120" required value="${esc(form.name)}" placeholder="Masukkan nama folder" autocomplete="off"></div><div class="modal-actions"><button type="button" class="btn btn-secondary" data-action="close-modal" ${form.loading ? 'disabled' : ''}>Batal</button><button type="submit" class="btn btn-primary" ${form.loading ? 'disabled' : ''}>${form.loading ? 'Membuat...' : 'Buat folder'}</button></div></form>`, '560px');
+}
+function folderSelectModalTemplate() {
+  return modalShell('Pilih folder', 'Pilih folder dari perangkat untuk diunggah secara terenkripsi.',
+    `<p class="folder-select-hint">Struktur subfolder dipertahankan. Maksimal 1.000 berkas per pilihan dan 500 MB per berkas. Folder kosong dapat dibuat melalui menu “Folder baru”.</p><div class="modal-actions"><button type="button" class="btn btn-secondary" data-action="close-modal">Batal</button><button type="button" class="btn btn-primary" data-action="choose-folder">${icon('folderUpload',16)} Pilih folder</button></div>`, '560px');
+}
+function folderUploadModalTemplate() {
+  const u = state.folderUpload;
+  return modalShell('Upload folder', 'Setiap nama folder dan berkas dienkripsi sebelum dikirim.',
+    `${errorBox(u.error)}<div class="folder-upload-status"><strong>${esc(u.current || 'Menyiapkan folder...')}</strong><p>${u.completed} dari ${u.total} berkas selesai</p><progress class="vault-progress upload-vault-progress" max="100" value="${u.progress}" aria-label="Progres upload folder ${u.progress}%">${u.progress}%</progress>${u.error ? '<p>Berkas yang sudah selesai tetap tersimpan. Periksa isi folder sebelum mencoba lagi.</p>' : ''}</div><div class="modal-actions"><button type="button" class="btn btn-secondary" data-action="close-modal" ${u.uploading ? 'disabled' : ''}>Tutup</button></div>`, '560px');
+}
 function changePassModalTemplate() {
   const p = state.passphrase;
   return modalShell('Ganti Passphrase (Re-Wrap MK)', 'Membungkus ulang 1 Master Key tanpa re-enkripsi berkas', `<div data-pass-error>${errorBox(p.error)}</div><div class="stage-status ${p.loading && p.stage ? 'is-visible' : ''}" data-pass-stage role="status" aria-live="polite">${p.loading && p.stage ? esc(p.stage) : ''}</div><form data-form="change-pass" class="form-stack" novalidate><div class="input-group"><label class="input-label">Passphrase Brankas Baru</label><input class="input-control" name="newPassphrase" type="password" placeholder="Minimal 12 karakter" minlength="12" required></div><div class="input-group"><label class="input-label">Konfirmasi Passphrase Baru</label><input class="input-control" name="confirmPassphrase" type="password" placeholder="Ulangi passphrase baru" minlength="12" required></div><div class="modal-actions"><button type="button" class="btn btn-secondary" data-action="close-modal" data-pass-cancel>Batal</button><button type="submit" class="btn btn-primary" data-pass-submit data-idle-label="Bungkus Ulang MK" data-loading-label="Memproses..." ${p.loading?'disabled':''}>${p.loading?'Memproses...':'Bungkus Ulang MK'}</button></div></form>`, '560px');
@@ -353,10 +433,13 @@ function previewModalTemplate() {
 function render() {
   applyTheme(state.theme);
   const main = !state.user ? loginTemplate() : state.activeTab === 'audit' ? auditTemplate() : state.activeTab === 'admin' && state.user.role === 'admin' ? adminTemplate() : dashboardTemplate();
-  appRoot.innerHTML = `<div class="app-shell">${headerTemplate()}<main class="app-main">${main}</main>${footerTemplate()}</div>`;
+  appRoot.innerHTML = `<div class="app-shell ${state.user ? 'drive-app-shell' : ''}">${headerTemplate()}${state.user ? `<div class="drive-app-body">${sidebarTemplate()}<main class="app-main">${main}</main></div>` : `<main class="app-main">${main}</main>${footerTemplate()}`}</div>`;
   let modal = '';
   if (state.modal === 'unlock') modal = unlockModalTemplate();
   if (state.modal === 'upload') modal = uploadModalTemplate();
+  if (state.modal === 'new-folder') modal = folderModalTemplate();
+  if (state.modal === 'folder-select') modal = folderSelectModalTemplate();
+  if (state.modal === 'folder-upload') modal = folderUploadModalTemplate();
   if (state.modal === 'change-pass') modal = changePassModalTemplate();
   if (state.modal === 'details') modal = detailsModalTemplate();
   if (state.modal === 'preview') modal = previewModalTemplate();
@@ -387,7 +470,7 @@ function loginSuccess(user) {
 function logout() {
   void request('/auth/logout', { method: 'POST' }).catch(() => undefined);
   clearTimeout(state.idleTimer); clearAuthToken(); clearVaultKeys(); terminateCryptoWorker(); state.user = null; state.unlocked = false;
-  state.files = []; state.decryptedFiles = []; state.activeTab = 'files'; setAppHistory('login', 'files', true); render();
+  state.files = []; state.decryptedFiles = []; state.folders = []; state.decryptedFolders = []; state.currentFolderId = null; state.pendingVaultAction = null; state.activeTab = 'files'; setAppHistory('login', 'files', true); render();
   showToast('Logout berhasil. Kunci RAM & token sesi telah dimusnahkan.');
 }
 function openModal(name) {
@@ -400,13 +483,16 @@ function openModal(name) {
   } else if (name === 'upload') {
     state.upload = { file:null, tags:'Rahasia, BSSN, Sertifikasi', uploading:false, progress:0, currentChunk:0, totalChunks:0, status:'', error:'' };
     render();
+  } else if (name === 'new-folder') {
+    state.folderForm = { name:'', loading:false, error:'' }; render();
   } else if (name === 'change-pass') {
     state.passphrase = { newValue:'', confirm:'', loading:false, error:'', stage:'' }; render();
   } else render();
 }
 function closeModal() {
   if (state.modal === 'preview') { closePreview(); return; }
-  if (state.modal === 'upload' && state.upload.uploading) return;
+  if ((state.modal === 'upload' && state.upload.uploading) || (state.modal === 'folder-upload' && state.folderUpload.uploading) || (state.modal === 'new-folder' && state.folderForm.loading)) return;
+  if (state.modal === 'unlock') state.pendingVaultAction = null;
   if (history.state?.secureVaultApp && history.state.view === 'app' && history.state.modal) {
     history.back();
     return;
@@ -430,16 +516,20 @@ async function fetchFiles() {
   state.filesLoading = true; state.filesError = '';
   if (state.activeTab === 'files') render();
   try {
-    const result = await request('/files');
-    state.files = result.files || [];
+    const [fileResult, folderResult] = await Promise.all([request('/files'), request('/folders')]);
+    state.files = fileResult.files || [];
+    state.folders = folderResult.folders || [];
+    if (state.currentFolderId && !state.folders.some(folder => folder.id === state.currentFolderId)) state.currentFolderId = null;
     await decryptFileMetadata();
   } catch (err) { state.filesError = err.message || 'Gagal memuat daftar berkas.'; }
   finally { state.filesLoading = false; if (state.activeTab === 'files') render(); }
 }
 async function decryptFileMetadata() {
-  if (!state.unlocked || !getLoadedMasterKey()) { state.decryptedFiles = state.files; return; }
-  const masterKey = getLoadedMasterKey(); const list = [];
-  for (const file of state.files) {
+  if (!state.unlocked || !getLoadedMasterKey()) { state.decryptedFiles = state.files; state.decryptedFolders = state.folders; return; }
+  const masterKey = getLoadedMasterKey();
+  async function decryptEntries(entries) {
+    const list = [];
+    for (const file of entries) {
     try {
       const dek = await unwrapDek(file.wrapped_dek, masterKey);
       let name = file.encrypted_file_name;
@@ -448,11 +538,14 @@ async function decryptFileMetadata() {
       if (file.encrypted_tags?.includes(':')) { const [cipher, iv] = file.encrypted_tags.split(':'); tags = (await decryptText(cipher, iv, dek)).split(',').map(t=>t.trim()).filter(Boolean); }
       list.push({ ...file, decryptedFileName:name, tags });
     } catch { list.push({ ...file, decryptedFileName:'[Gagal dekripsi nama berkas]', tags:[] }); }
+    }
+    return list;
   }
-  state.decryptedFiles = list;
+  state.decryptedFiles = await decryptEntries(state.files);
+  state.decryptedFolders = await decryptEntries(state.folders);
 }
 async function toggleVaultLock() {
-  clearVaultKeys(); terminateCryptoWorker(); state.unlocked = false; state.decryptedFiles = state.files; render();
+  clearVaultKeys(); terminateCryptoWorker(); state.unlocked = false; state.decryptedFiles = state.files; state.decryptedFolders = state.folders; render();
   showToast('Brankas berhasil dikunci. Seluruh kunci di RAM telah dibersihkan secara mutlak.');
 }
 function updateVaultModalProgress(message, mode = 'init') {
@@ -535,6 +628,7 @@ async function handleUnlock(form) {
     setLoadedKeys(kek, masterKey); state.unlocked = true;
     await decryptFileMetadata(); state.modalLoading = false; state.modal = null; setAppHistory('app', state.activeTab, true, null); render();
     showToast('Brankas berhasil dibuka! Master Key aktif di RAM non-extractable.');
+    if (state.pendingVaultAction) { const next = state.pendingVaultAction; state.pendingVaultAction = null; openModal(next === 'new-folder' ? 'new-folder' : 'folder-select'); }
   } catch (err) { setVaultModalError(err.message || 'Gagal membuka brankas.'); }
 }
 async function handleInitializeVault(form) {
@@ -569,6 +663,7 @@ async function handleInitializeVault(form) {
     };
     setLoadedKeys(kek, masterKey); state.unlocked = true; await decryptFileMetadata(); state.modalLoading = false; state.modal = null; setAppHistory('app', state.activeTab, true, null); render();
     showToast('Brankas berhasil diinisialisasi dan dibuka.');
+    if (state.pendingVaultAction) { const next = state.pendingVaultAction; state.pendingVaultAction = null; openModal(next === 'new-folder' ? 'new-folder' : 'folder-select'); }
   } catch (err) { setVaultModalError(err.message || 'Gagal menginisialisasi brankas.'); }
 }
 async function handleChangePassphrase(form) {
@@ -641,35 +736,133 @@ async function selectUploadFile(file) {
   if (issue) { state.upload.error=issue; state.upload.file=null; render(); return; }
   state.upload.file=file; state.upload.error=''; render();
 }
-async function startUpload() {
-  const masterKey = getLoadedMasterKey(); const file = state.upload.file;
-  if (!masterKey) { state.upload.error='Brankas terkunci! Silakan buka brankas terlebih dahulu.'; render(); return; }
-  if (!file) { state.upload.error='Pilih berkas yang akan dienkripsi.'; render(); return; }
-  state.upload.uploading=true; state.upload.error=''; state.upload.progress=0; state.upload.status='1/5: Menghasilkan Data Encryption Key (DEK) 256-bit unik...'; render();
+function validateFolderName(name) {
+  const value = String(name || '').trim();
+  if (!value || value.length > 120 || value === '.' || value === '..' || /[\\/:*?"<>|\x00-\x1f]/.test(value)) {
+    throw new Error('Nama folder harus 1–120 karakter dan tidak boleh mengandung karakter path.');
+  }
+  return value;
+}
+async function createEncryptedFolder(name, parentFolderId) {
+  const masterKey = getLoadedMasterKey();
+  if (!masterKey) throw new Error('Buka kunci brankas sebelum membuat folder.');
+  const dek = await generateFileDek();
+  const wrappedDek = await wrapDek(dek, masterKey);
+  const encrypted = await encryptText(validateFolderName(name), dek);
+  const result = await request('/folders', { method:'POST', body:JSON.stringify({
+    encryptedFolderName:`${encrypted.ciphertextB64}:${encrypted.ivB64}`, wrappedDek, parentFolderId
+  }) });
+  return result.folderId;
+}
+async function saveNewFolder(form) {
+  if (state.folderForm.loading) return;
+  state.folderForm.name = String(new FormData(form).get('folderName') || '').trim();
+  state.folderForm.error = '';
   try {
-    const dek = await generateFileDek();
-    state.upload.status='2/5: Membungkus DEK dengan Master Key (AES-KW)...'; render();
-    const wrappedDek = await wrapDek(dek, masterKey);
-    state.upload.status='3/5: Mengenkripsi nama berkas dan label virtual dengan DEK...'; render();
-    const encryptedName = await encryptText(file.name, dek); const encryptedTags = await encryptText(state.upload.tags, dek);
-    state.upload.status='4/4: Menyiapkan unggahan tanpa mengirim fingerprint konten plaintext ke server...'; render();
-    const totalChunks = Math.ceil(file.size/CHUNK_SIZE); state.upload.totalChunks=totalChunks;
-    const init = await request('/files/init', { method:'POST', body:JSON.stringify({ encryptedFileName:`${encryptedName.ciphertextB64}:${encryptedName.ivB64}`, encryptedTags:`${encryptedTags.ciphertextB64}:${encryptedTags.ivB64}`, fileSizeBytes:file.size, totalChunks, wrappedDek }) });
-    const fileId = init.fileId;
-    for (let i=0; i<totalChunks; i++) {
-      state.upload.currentChunk=i+1; state.upload.status=`5/5: Membaca, mengenkripsi & mengunggah chunk ${i+1}/${totalChunks} (AES-256-GCM + AAD)...`; render();
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunkBuffer = await file.slice(start, end).arrayBuffer();
-      const encrypted = await encryptChunkOffThread(chunkBuffer, dek, fileId, i);
-      const body=new FormData(); body.append('fileId',fileId); body.append('chunkIndex',String(i)); body.append('ivBase64',encrypted.ivB64); body.append('aadString',encrypted.aad); body.append('chunkBlob',new Blob([encrypted.ciphertext]));
-      await request(`/files/${fileId}/chunk/${i}`,{method:'POST',body});
-      state.upload.progress=10 + Math.round((i+1)/totalChunks*90); render();
+    validateFolderName(state.folderForm.name);
+    state.folderForm.loading = true; render();
+    await createEncryptedFolder(state.folderForm.name, state.currentFolderId);
+    state.folderForm.loading = false; state.modal = null;
+    setAppHistory('app', state.activeTab, true, null);
+    await fetchFiles(); showToast('Folder berhasil dibuat.');
+  } catch (err) { state.folderForm.loading = false; state.folderForm.error = err.message || 'Gagal membuat folder.'; render(); }
+}
+async function uploadEncryptedFile(file, parentFolderId, tags, onProgress) {
+  const masterKey = getLoadedMasterKey();
+  if (!masterKey) throw new Error('Brankas terkunci. Buka kunci sebelum mengunggah.');
+  onProgress('Membuat kunci enkripsi berkas...', 0);
+  const dek = await generateFileDek();
+  const wrappedDek = await wrapDek(dek, masterKey);
+  const encryptedName = await encryptText(file.name, dek);
+  const encryptedTags = await encryptText(tags, dek);
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+  onProgress('Menyiapkan unggahan terenkripsi...', 5);
+  const init = await request('/files/init', { method:'POST', body:JSON.stringify({
+    encryptedFileName:`${encryptedName.ciphertextB64}:${encryptedName.ivB64}`,
+    encryptedTags:`${encryptedTags.ciphertextB64}:${encryptedTags.ivB64}`,
+    fileSizeBytes:file.size, totalChunks, wrappedDek, parentFolderId
+  }) });
+  const fileId = init.fileId;
+  for (let i = 0; i < totalChunks; i++) {
+    onProgress(`Mengenkripsi dan mengunggah chunk ${i + 1}/${totalChunks}...`, 5 + Math.round(i / totalChunks * 90));
+    const start = i * CHUNK_SIZE;
+    const chunkBuffer = await file.slice(start, Math.min(start + CHUNK_SIZE, file.size)).arrayBuffer();
+    const encrypted = await encryptChunkOffThread(chunkBuffer, dek, fileId, i);
+    const body = new FormData();
+    body.append('fileId', fileId); body.append('chunkIndex', String(i));
+    body.append('ivBase64', encrypted.ivB64); body.append('aadString', encrypted.aad);
+    body.append('chunkBlob', new Blob([encrypted.ciphertext]));
+    await request(`/files/${fileId}/chunk/${i}`, { method:'POST', body });
+    onProgress(`Chunk ${i + 1}/${totalChunks} selesai.`, 5 + Math.round((i + 1) / totalChunks * 90));
+  }
+  await request(`/files/${fileId}/complete`, { method:'POST' });
+  onProgress('Berkas selesai diunggah.', 100);
+}
+async function startUpload() {
+  const file = state.upload.file;
+  if (!getLoadedMasterKey()) { state.upload.error='Brankas terkunci! Silakan buka brankas terlebih dahulu.'; render(); return; }
+  if (!file) { state.upload.error='Pilih berkas yang akan dienkripsi.'; render(); return; }
+  state.upload.uploading = true; state.upload.error = ''; state.upload.progress = 0; render();
+  try {
+    await uploadEncryptedFile(file, state.currentFolderId, state.upload.tags, (status, progress) => {
+      state.upload.status = status; state.upload.progress = progress; render();
+    });
+    state.modal = null; setAppHistory('app', state.activeTab, true, null);
+    await fetchFiles(); showToast('Berkas berhasil dienkripsi sisi-klien dan diunggah.');
+  } catch (err) { state.upload.uploading = false; state.upload.error = err.message || 'Gagal mengenkripsi atau mengunggah berkas.'; render(); }
+}
+async function startFolderUpload(files) {
+  if (!getLoadedMasterKey()) { openModal('unlock'); return; }
+  const entries = Array.from(files, file => ({ file, parts: String(file.webkitRelativePath || '').split('/') }));
+  if (!entries.length) { showToast('Folder kosong tidak dapat dipilih oleh browser. Buat folder secara manual.', 'error'); return; }
+  if (entries.length > 1000) { showToast('Pilih folder dengan maksimal 1.000 berkas per unggahan.', 'error'); return; }
+  try {
+    for (const entry of entries) {
+      if (entry.parts.length < 2 || entry.parts.length > 21 || entry.parts.some((part, i) => i < entry.parts.length - 1 && !part)) {
+        throw new Error('Struktur folder yang dipilih tidak valid atau terlalu dalam.');
+      }
+      for (const name of entry.parts.slice(0, -1)) validateFolderName(name);
+      if (!entry.file.size || entry.file.size > MAX_FILE_SIZE) throw new Error(`Berkas ${entry.file.name} kosong atau melebihi batas 500 MB.`);
+      const issue = await validateUploadFile(entry.file);
+      if (issue) throw new Error(`${entry.file.name}: ${issue}`);
     }
-    state.upload.status='Selesai! Mencatat transaksi ke audit trail...'; render();
-    await request(`/files/${fileId}/complete`,{method:'POST'});
-    state.modal=null; setAppHistory('app',state.activeTab,true,null); await fetchFiles(); render(); showToast('Berkas berhasil dienkripsi sisi-klien dan diunggah.');
-  } catch(err) { state.upload.uploading=false; state.upload.error=err.message||'Gagal mengenkripsi atau mengunggah berkas.'; render(); }
+  } catch (err) { showToast(err.message || 'Folder tidak dapat diunggah.', 'error'); return; }
+  state.folderUpload = { uploading:true, current:'Membuat struktur folder...', completed:0, total:entries.length, progress:0, error:'' };
+  if (state.modal === 'folder-select') { state.modal = 'folder-upload'; setAppHistory('app', state.activeTab, true, 'folder-upload'); render(); }
+  else openModal('folder-upload');
+  const folderIds = new Map();
+  const destinationFolderId = state.currentFolderId;
+  try {
+    const paths = new Set();
+    for (const entry of entries) for (let depth = 1; depth < entry.parts.length; depth++) paths.add(entry.parts.slice(0, depth).join('/'));
+    for (const path of [...paths].sort((a,b) => a.split('/').length - b.split('/').length)) {
+      const parts = path.split('/');
+      const parentPath = parts.slice(0, -1).join('/');
+      const parentId = parentPath ? folderIds.get(parentPath) : destinationFolderId;
+      state.folderUpload.current = `Membuat folder ${parts[parts.length - 1]}...`; render();
+      folderIds.set(path, await createEncryptedFolder(parts[parts.length - 1], parentId));
+    }
+    for (const entry of entries) {
+      const parentPath = entry.parts.slice(0, -1).join('/');
+      const parentId = folderIds.get(parentPath);
+      state.folderUpload.current = `Mengunggah ${entry.file.name}...`; render();
+      await uploadEncryptedFile(entry.file, parentId, '', (_status, fileProgress) => {
+        state.folderUpload.progress = Math.round((state.folderUpload.completed + fileProgress / 100) / entries.length * 100);
+        render();
+      });
+      state.folderUpload.completed++;
+      state.folderUpload.progress = Math.round(state.folderUpload.completed / entries.length * 100);
+      render();
+    }
+    state.folderUpload.uploading = false; state.modal = null;
+    setAppHistory('app', state.activeTab, true, null);
+    await fetchFiles(); showToast(`${entries.length} berkas berhasil diunggah dalam folder terenkripsi.`);
+  } catch (err) {
+    state.folderUpload.uploading = false;
+    state.folderUpload.error = err.message || 'Upload folder gagal.';
+    state.folderUpload.current = 'Upload terhenti';
+    await fetchFiles(); render();
+  }
 }
 async function forEachDecryptedChunk(file, onChunk, onProgress) {
   const masterKey = getLoadedMasterKey();
@@ -843,19 +1036,28 @@ async function revokeSession(id) {
 
 // Delegated UI events keep the page framework-free while preserving every action.
 document.addEventListener('click', async event => {
+  if(state.createMenuOpen && !event.target.closest('.drive-create-wrap')){state.createMenuOpen=false;$('.drive-create-menu')?.remove();$('.drive-new')?.setAttribute('aria-expanded','false');}
   const button=event.target.closest('[data-action]');if(!button)return;
   const action=button.dataset.action;
+  if(action==='create-menu'){state.createMenuOpen=!state.createMenuOpen;render();if(state.createMenuOpen)$('.drive-create-menu [data-action="new-folder"]')?.focus();return;}
   if(action==='overlay-close' && event.target===button){closeModal();return;}
   if(action==='preview-overlay' && event.target===button){closePreview();return;}
   if(action==='close-modal'){closeModal();return;}
   if(action==='close-preview'){closePreview();return;}
   if(action==='theme'){applyTheme(button.dataset.theme);render();return;}
+  if(action==='dashboard-view'){state.activeTab='files';state.dashboardView=button.dataset.view;state.currentFolderId=null;state.search='';state.selectedTag=null;state.sortBy='date';state.sortAsc=false;setAppHistory('app','files');render();fetchFiles();return;}
+  if(action==='folder-root'){state.currentFolderId=null;state.search='';state.selectedTag=null;setAppHistory('app','files');render();return;}
+  if(action==='folder-open'){if(state.folders.some(folder=>folder.id===button.dataset.id)){state.currentFolderId=button.dataset.id;state.search='';state.selectedTag=null;setAppHistory('app','files');render();}return;}
+  if(action==='delete-folder'){const folder=state.decryptedFolders.find(item=>item.id===button.dataset.id);if(!folder||!state.unlocked)return;if(!confirm(`Hapus folder kosong "${folder.decryptedFileName || 'Folder'}"?`))return;try{await request(`/folders/${folder.id}`,{method:'DELETE'});await fetchFiles();showToast('Folder berhasil dihapus.');}catch(err){showToast(err.message||'Folder gagal dihapus.','error');}return;}
+  if(action==='file-layout'){state.fileLayout=button.dataset.layout;render();return;}
   if(action==='tab'){state.activeTab=button.dataset.tab;setAppHistory('app',state.activeTab);render();if(state.activeTab==='files')fetchFiles();if(state.activeTab==='audit')fetchAudit();if(state.activeTab==='admin')fetchAdmin();return;}
   if(action==='logout'){logout();return;}
   if(action==='lock-vault'){toggleVaultLock();return;}
   if(action==='open-unlock'){openModal('unlock');return;}
   if(action==='open-passphrase'){openModal('change-pass');return;}
-  if(action==='upload'){if(!state.unlocked){openModal('unlock');return;}openModal('upload');return;}
+  if(action==='new-folder'){state.createMenuOpen=false;if(!state.unlocked){state.pendingVaultAction='new-folder';openModal('unlock');return;}openModal('new-folder');return;}
+  if(action==='choose-folder'){state.createMenuOpen=false;$('.drive-create-menu')?.remove();$('.drive-new')?.setAttribute('aria-expanded','false');if(!state.unlocked){state.pendingVaultAction='choose-folder';openModal('unlock');return;}const picker=$('#folder-picker');if(!picker||!('webkitdirectory' in picker)){showToast('Browser ini tidak mendukung pemilihan folder. Gunakan Chrome atau Edge.','error');return;}picker.click();return;}
+  if(action==='upload'){state.createMenuOpen=false;if(!state.unlocked){openModal('unlock');return;}openModal('upload');return;}
   if(action==='refresh-files'){fetchFiles();return;}
   if(action==='refresh-audit'){fetchAudit();return;}
   if(action==='verify-audit'){verifyAudit();return;}
@@ -876,6 +1078,9 @@ document.addEventListener('click', async event => {
   if(action==='detail-save'){saveFileMetadata();return;}
   if(action==='admin-quota'){updateQuota(button);return;}
   if(action==='admin-revoke'){revokeSession(button.dataset.id);return;}
+});
+document.addEventListener('keydown', event => {
+  if(event.key==='Escape' && state.createMenuOpen){state.createMenuOpen=false;$('.drive-create-menu')?.remove();const trigger=$('.drive-new');trigger?.setAttribute('aria-expanded','false');trigger?.focus();}
 });
 
 document.addEventListener('submit', async event => {
@@ -913,10 +1118,12 @@ document.addEventListener('submit', async event => {
   if(type==='vault-unlock')handleUnlock(form);
   if(type==='vault-init')handleInitializeVault(form);
   if(type==='change-pass')handleChangePassphrase(form);
+  if(type==='create-folder')saveNewFolder(form);
 });
 
 document.addEventListener('change', event => {
   if(event.target.id==='upload-file'){selectUploadFile(event.target.files?.[0]);return;}
+  if(event.target.id==='folder-picker'){const files=Array.from(event.target.files||[]);event.target.value='';startFolderUpload(files);return;}
   if(event.target.id==='sort-by'){state.sortBy=event.target.value;render();return;}
   if(event.target.id==='audit-action'){state.audit.action=event.target.value;render();return;}
   if(event.target.id==='audit-status'){state.audit.status=event.target.value;render();return;}
@@ -933,7 +1140,7 @@ document.addEventListener('dragover', event => {if(event.target.closest('#drop-z
 document.addEventListener('dragleave', event => {if(event.target.closest('#drop-zone'))$('#drop-zone')?.classList.remove('drag-over');});
 document.addEventListener('drop', event => {const zone=event.target.closest('#drop-zone');if(zone){event.preventDefault();zone.classList.remove('drag-over');selectUploadFile(event.dataTransfer.files?.[0]);}});
 window.addEventListener('pointerdown',resetIdleTimer,{passive:true});window.addEventListener('touchstart',resetIdleTimer,{passive:true});window.addEventListener('keydown',resetIdleTimer);window.addEventListener('wheel',resetIdleTimer,{passive:true});window.addEventListener('click',resetIdleTimer);window.addEventListener('popstate',handleAppPopState);
-window.addEventListener('auth:unauthorized',(event)=>{clearTimeout(state.idleTimer);state.user=null;state.modal=null;state.modalLoading=false;state.modalError='';state.modalStage='';state.vaultProfile=null;clearVaultKeys();terminateCryptoWorker();state.unlocked=false;state.login.mfaRequired=false;state.login.mfaToken='';state.login.mfaSecret='';state.login.mfaOtpUri='';setAppHistory('login','files',true);render();showToast(event.detail?.message || 'Sesi tidak lagi valid. Silakan login kembali.','error');});
+window.addEventListener('auth:unauthorized',(event)=>{clearTimeout(state.idleTimer);state.user=null;state.modal=null;state.modalLoading=false;state.modalError='';state.modalStage='';state.vaultProfile=null;clearVaultKeys();terminateCryptoWorker();state.unlocked=false;state.files=[];state.decryptedFiles=[];state.folders=[];state.decryptedFolders=[];state.currentFolderId=null;state.pendingVaultAction=null;state.login.mfaRequired=false;state.login.mfaToken='';state.login.mfaSecret='';state.login.mfaOtpUri='';setAppHistory('login','files',true);render();showToast(event.detail?.message || 'Sesi tidak lagi valid. Silakan login kembali.','error');});
 window.addEventListener('storage',()=>{if(state.theme==='system')applyTheme('system');});
 if(state.theme==='system')matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>applyTheme('system'));
 if (!history.state?.secureVaultApp) setAppHistory('login', 'files', true);

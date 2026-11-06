@@ -89,6 +89,15 @@ try {
     // ----------------------------------------------------
     // File Routes
     // ----------------------------------------------------
+    if ($path === '/api/folders' && $method === 'GET') {
+        FileRoutes::listFolders();
+    }
+    if ($path === '/api/folders' && $method === 'POST') {
+        FileRoutes::createFolder($body);
+    }
+    if (preg_match('#^/api/folders/([a-zA-Z0-9\-]+)$#', $path, $m) && $method === 'DELETE') {
+        FileRoutes::deleteFolder($m[1]);
+    }
     if ($path === '/api/files' && $method === 'GET') {
         FileRoutes::list();
     }

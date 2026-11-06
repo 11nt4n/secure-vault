@@ -11,6 +11,13 @@
 - **Backend**: REST API berbasis PHP 8, OpenSSL, HS256 JWT, chunk streaming, dan SQLite melalui PDO_SQLite.
 - **Frontend native**: HTML, CSS, dan JavaScript ES Modules tanpa React, TypeScript, Vite, Node.js, npm, atau proses build.
 - **Pratinjau lokal**: PDF, gambar, TXT, CSV, JSON, dan Markdown setelah berkas didekripsi di browser.
+- **Folder terenkripsi**: buat folder dan subfolder, unggah folder dari perangkat, lalu buka isinya di dashboard. Nama folder dienkripsi di browser; server hanya menyimpan hubungan antar-ID folder.
+
+## Folder dan unggah folder
+
+Di dashboard, pilih **+ Baru → Folder baru** untuk membuat folder pada lokasi saat ini. Pilih **+ Baru → Upload folder** untuk mengunggah struktur folder beserta berkasnya. Setiap berkas tetap melewati validasi dan enkripsi chunk yang sama dengan unggah berkas biasa. Folder hanya dapat dihapus setelah isinya kosong.
+
+Pemilihan folder menggunakan dukungan `webkitdirectory` pada browser seperti Chrome atau Edge. Pemilih tersebut tidak mengembalikan direktori kosong, sehingga subfolder kosong perlu dibuat melalui **Folder baru**. Batas satu pemilihan adalah 1.000 berkas, dan batas tiap berkas tetap 500 MiB.
 
 ## Memulai aplikasi
 

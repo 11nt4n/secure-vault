@@ -66,6 +66,8 @@ Tes regresi memulai API lokal dengan direktori data sementara dan memvalidasi pe
 | `POST` | `/api/auth/setup-vault` | Inisialisasi awal brankas Zero-Knowledge |
 | `POST` | `/api/auth/rewrap-master-key`| Update passphrase (re-wrap Master Key) |
 | `GET` | `/api/files` | Daftar file terenkripsi milik pengguna |
+| `GET` / `POST` | `/api/folders` | Daftar dan pembuatan folder terenkripsi milik pengguna |
+| `DELETE` | `/api/folders/{id}` | Hapus folder yang sudah kosong |
 | `POST` | `/api/files/init` | Inisialisasi metadata unggah berkas |
 | `POST` | `/api/files/{id}/chunk/{idx}` | Unggah 5MB ciphertext chunk |
 | `POST` | `/api/files/{id}/complete` | Menyelesaikan proses unggah berkas |

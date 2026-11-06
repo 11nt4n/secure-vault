@@ -50,9 +50,24 @@ class FileRoutes
     private static function requireCompleted(array $file): void
     {
         self::requireNotDeleting($file);
+        if (($file['kind'] ?? 'file') !== 'file') Response::error('Objek ini adalah folder, bukan berkas.', 400);
         if (!self::isCompleted($file)) {
             Response::error('Berkas belum lengkap diunggah.', 409);
         }
+    }
+
+    private static function validateParentFolder(Database $db, string $ownerId, $parentFolderId): ?string
+    {
+        if ($parentFolderId === null) return null;
+        if (!is_string($parentFolderId) || !preg_match('/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/', $parentFolderId)) {
+            Response::error('ID folder tujuan tidak valid.', 400);
+        }
+        $parent = $db->getFileById($parentFolderId);
+        if (!$parent || $parent['owner_id'] !== $ownerId || ($parent['kind'] ?? 'file') !== 'folder'
+            || !empty($parent['deletion_pending'])) {
+            Response::error('Folder tujuan tidak ditemukan atau akses ditolak.', 404);
+        }
+        return $parentFolderId;
     }
 
     public static function list(): void
@@ -63,6 +78,60 @@ class FileRoutes
         Response::json(['files' => $files]);
     }
 
+    public static function listFolders(): void
+    {
+        $user = AuthMiddleware::authenticate();
+        Response::json(['folders' => Database::getInstance()->getFoldersByOwner($user['id'])]);
+    }
+
+    public static function createFolder(array $body): void
+    {
+        $user = AuthMiddleware::authenticate();
+        $encryptedName = $body['encryptedFolderName'] ?? null;
+        $wrappedDek = $body['wrappedDek'] ?? null;
+        if (!self::validEncryptedText($encryptedName)) Response::error('Nama folder terenkripsi tidak valid.', 400);
+        $decodedWrappedDek = self::decodeBase64Field($wrappedDek, 256);
+        if (!is_string($decodedWrappedDek) || strlen($decodedWrappedDek) !== 40) Response::error('Kunci folder terbungkus tidak valid.', 400);
+        $db = Database::getInstance();
+        $parentId = self::validateParentFolder($db, $user['id'], $body['parentFolderId'] ?? null);
+        $folderId = Database::generateUuid();
+        $folder = [
+            'id' => $folderId,
+            'owner_id' => $user['id'],
+            'kind' => 'folder',
+            'parent_folder_id' => $parentId,
+            'encrypted_file_name' => $encryptedName,
+            'encrypted_tags' => '',
+            'wrapped_dek' => $wrappedDek,
+            'file_size_bytes' => 0,
+            'total_chunks' => 0,
+            'upload_status' => 'completed',
+            'quota_accounted' => false,
+            'created_at' => gmdate('Y-m-d\TH:i:s.000\Z'),
+        ];
+        $db->transaction(function (Database $tx) use ($folder, $user, $folderId): void {
+            $tx->addFile($folder);
+            Audit::logEvent($user['id'], 'FOLDER_CREATE', $folderId, null, null, 'SUCCESS');
+        });
+        Response::json(['folderId' => $folderId], 201);
+    }
+
+    public static function deleteFolder(string $folderId): void
+    {
+        $user = AuthMiddleware::authenticate();
+        $db = Database::getInstance();
+        $folder = $db->getFileById($folderId);
+        if (!$folder || ($folder['kind'] ?? 'file') !== 'folder' || $folder['owner_id'] !== $user['id']) {
+            Response::error('Folder tidak ditemukan atau akses ditolak.', 404);
+        }
+        if ($db->folderHasChildren($folderId, $user['id'])) Response::error('Folder masih berisi berkas atau subfolder.', 409);
+        $db->transaction(function (Database $tx) use ($folderId, $user): void {
+            $tx->deleteFile($folderId);
+            Audit::logEvent($user['id'], 'FOLDER_DELETE', $folderId, null, null, 'SUCCESS');
+        });
+        Response::json(['message' => 'Folder kosong berhasil dihapus.']);
+    }
+
     public static function init(array $body): void
     {
         $user = AuthMiddleware::authenticate();
@@ -71,6 +140,8 @@ class FileRoutes
         $wrappedDek = $body['wrappedDek'] ?? null;
         $fileSizeBytes = $body['fileSizeBytes'] ?? null;
         $totalChunks = $body['totalChunks'] ?? null;
+        $db = Database::getInstance();
+        $parentFolderId = self::validateParentFolder($db, $user['id'], $body['parentFolderId'] ?? null);
 
         if (!is_int($fileSizeBytes) || !is_int($totalChunks)) {
             Response::error('Ukuran berkas dan jumlah chunk harus berupa bilangan bulat.', 400);
@@ -100,6 +171,7 @@ class FileRoutes
         $newFile = [
             'id' => $fileId,
             'owner_id' => $user['id'],
+            'parent_folder_id' => $parentFolderId,
             'encrypted_file_name' => $encryptedFileName,
             'encrypted_tags' => $encryptedTags,
             'file_size_bytes' => $fileSizeBytes,
@@ -108,7 +180,6 @@ class FileRoutes
             'created_at' => gmdate('Y-m-d\\TH:i:s.000\\Z'),
         ];
 
-        $db = Database::getInstance();
         $reserved = $db->transaction(function (Database $tx) use ($user, $newFile, $fileId, $fileSizeBytes, $totalChunks): bool {
             $ok = $tx->addFileWithQuotaReservation($user['id'], $newFile);
             if ($ok) {
@@ -361,6 +432,7 @@ class FileRoutes
         $file = $db->getFileById($fileId);
         if (!$file) Response::error('Berkas tidak ditemukan.', 404);
         if ($file['owner_id'] !== $user['id']) Response::error('Akses ditolak: hanya pemilik berkas yang dapat menghapus.', 403);
+        if (($file['kind'] ?? 'file') !== 'file') Response::error('Gunakan endpoint folder untuk menghapus folder.', 400);
 
         $fileSize = (int)$file['file_size_bytes'];
         $wasCompleted = self::isCompleted($file);
