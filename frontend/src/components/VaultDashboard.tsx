@@ -163,6 +163,10 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
    * Download all chunks, decrypt each with AAD, verify integrity, reassemble and trigger browser download
    */
   const handleDownload = async (file: EncryptedFile) => {
+    if (file.upload_status === 'uploading') {
+      setError('Berkas belum selesai diunggah. Hapus unggahan yang terputus atau unggah ulang berkas tersebut.');
+      return;
+    }
     const masterKey = getLoadedMasterKey();
     if (!masterKey) {
       onOpenUnlockModal();
@@ -278,7 +282,7 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
         <div className="glass-card" style={{ padding: '1.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
             <span style={{ fontSize: '0.775rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Total Berkas Terenkripsi
+              Berkas dalam Brankas
             </span>
             <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'var(--badge-cyan-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <FileText size={18} color="var(--accent-cyan)" />
@@ -288,7 +292,7 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
             {files.length} <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', fontWeight: 500 }}>berkas</span>
           </div>
           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-            Enkripsi sisi-klien sebelum transmisi (Zero-Knowledge)
+            Termasuk unggahan yang belum selesai
           </p>
         </div>
 
@@ -562,11 +566,17 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
                       {(file.file_size_bytes / (1024 * 1024)).toFixed(2)} MB
                     </td>
 
-                    {/* Chunks */}
+                    {/* Chunks / upload state */}
                     <td style={{ padding: '1rem' }}>
-                      <span className="badge badge-cyan" style={{ fontSize: '0.7rem' }}>
-                        {file.total_chunks} chunk ({file.total_chunks * 5} MB)
-                      </span>
+                      {file.upload_status === 'uploading' ? (
+                        <span className="badge badge-amber" style={{ fontSize: '0.7rem' }}>
+                          Unggahan belum lengkap
+                        </span>
+                      ) : (
+                        <span className="badge badge-cyan" style={{ fontSize: '0.7rem' }}>
+                          {file.total_chunks} chunk ({(file.file_size_bytes / (1024 * 1024)).toFixed(1)} MB)
+                        </span>
+                      )}
                     </td>
 
                     {/* Tags */}
@@ -595,9 +605,9 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
                         {/* Download & Decrypt */}
                         <button
                           onClick={() => handleDownload(file)}
-                          disabled={isDownloading}
+                          disabled={isDownloading || file.upload_status === 'uploading'}
                           className="btn btn-sm btn-primary"
-                          title="Unduh & Dekripsi Berkas (AES-256-GCM)"
+                          title={file.upload_status === 'uploading' ? 'Unggahan belum selesai' : 'Unduh & Dekripsi Berkas (AES-256-GCM)'}
                         >
                           {isDownloading ? (
                             <span>{downloadProgress}%</span>
@@ -612,8 +622,9 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
                         {/* File Details */}
                         <button
                           onClick={() => onSelectFileDetails(file)}
+                          disabled={file.upload_status === 'uploading'}
                           className="btn btn-sm btn-secondary"
-                          title="Lihat Spesifikasi Kriptografis Berkas"
+                          title={file.upload_status === 'uploading' ? 'Metadata belum dapat diperiksa sebelum unggahan selesai' : 'Lihat Spesifikasi Kriptografis Berkas'}
                         >
                           <Info size={14} />
                         </button>

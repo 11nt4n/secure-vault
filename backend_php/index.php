@@ -1,7 +1,7 @@
 <?php
 // backend_php/index.php
 // Secure Vault REST API (PHP Edition)
-// Compatible with ISO/IEC 15408:2022 & ISO/IEC 18045:2026 Common Criteria
+// Security controls are documented against standards references; this is not a certification claim.
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/utils/Response.php';
@@ -50,7 +50,7 @@ try {
             'status' => 'OK',
             'service' => 'Secure Vault API (PHP Edition)',
             'security' => 'Zero-Knowledge Client-Side Encryption + SHA-256 Hash-Chain Audit',
-            'standard' => 'ISO/IEC 15408:2022 & ISO/IEC 18045:2026',
+            'standardReference' => 'ISO/IEC 15408 dan ISO/IEC 18045 (referensi desain; bukan klaim sertifikasi)',
             'timestamp' => gmdate('Y-m-d\TH:i:s.000\Z')
         ]);
     }
@@ -64,8 +64,14 @@ try {
     if ($path === '/api/auth/login' && $method === 'POST') {
         AuthRoutes::login($body);
     }
+    if ($path === '/api/auth/mfa/setup' && $method === 'POST') {
+        AuthRoutes::setupMfa($body);
+    }
     if ($path === '/api/auth/mfa/verify' && $method === 'POST') {
         AuthRoutes::verifyMfa($body);
+    }
+    if ($path === '/api/auth/logout' && $method === 'POST') {
+        AuthRoutes::logout();
     }
     if ($path === '/api/auth/me' && $method === 'GET') {
         AuthRoutes::me();
@@ -150,5 +156,7 @@ try {
     Response::error("Endpoint {$method} {$path} tidak ditemukan pada Secure Vault PHP API.", 404);
 
 } catch (Throwable $e) {
-    Response::error('Terjadi kesalahan internal pada peladen Secure Vault PHP: ' . $e->getMessage(), 500);
+    // Keep implementation details out of client-visible responses.
+    error_log('[Secure Vault] ' . $e->__toString());
+    Response::error('Terjadi kesalahan internal pada peladen Secure Vault.', 500);
 }

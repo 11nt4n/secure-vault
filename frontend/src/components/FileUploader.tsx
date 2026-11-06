@@ -40,6 +40,11 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      if (file.size === 0) {
+        setError('Berkas kosong belum didukung. Pilih berkas dengan ukuran minimal 1 byte.');
+        setSelectedFile(null);
+        return;
+      }
       if (file.size > MAX_FILE_SIZE) {
         setError(`Ukuran berkas (${(file.size / (1024 * 1024)).toFixed(1)} MB) melebihi batas MVP 500 MB.`);
         setSelectedFile(null);
@@ -54,6 +59,11 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
+      if (file.size === 0) {
+        setError('Berkas kosong belum didukung. Pilih berkas dengan ukuran minimal 1 byte.');
+        setSelectedFile(null);
+        return;
+      }
       if (file.size > MAX_FILE_SIZE) {
         setError(`Ukuran berkas (${(file.size / (1024 * 1024)).toFixed(1)} MB) melebihi batas MVP 500 MB.`);
         setSelectedFile(null);

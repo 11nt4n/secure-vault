@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Secure Vault • Uji Argon2id</title>
+  <link rel="stylesheet" href="./diagnostics.css?v=9">
+</head>
+<body>
+<main>
+  <h1>Diagnostik Argon2id Secure Vault</h1><p><strong>Build: NATIVE-V9-2026.11.04</strong></p>
+  <p>Halaman ini menguji runtime Argon2id lokal dan operasi AES-KW browser tanpa mengirim data ke server. Gunakan hanya untuk diagnosis, bukan untuk memasukkan passphrase brankas Anda. Uji ini memakai passphrase dan salt acak sementara.</p>
+  <button id="run" type="button">Jalankan Uji Kriptografi</button>
+  <div id="output" role="status" aria-live="polite">Belum diuji.</div>
+  <p class="note">Buka melalui <code>http://127.0.0.1:5173/diagnostics/argon2-self-test.html</code>. Jangan jalankan melalui <code>file://</code>. Hasil uji tidak menyertakan passphrase maupun kunci mentah.</p>
+  <p class="note"><a href="../index.html?v=9">Kembali ke Secure Vault</a></p>
+</main>
+<script src="../argon2-bundled.min.js"></script>
+<script src="./argon2-self-test.js"></script>
+</body>
+</html>

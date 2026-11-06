@@ -6,9 +6,16 @@ frontend/node_modules/
 dist/
 frontend/dist/
 
-# Backend dynamic storage & uploads
+# Backend dynamic storage and generated data (never commit user data or credentials)
 backend_php/storage/*
 !backend_php/storage/.gitkeep
+backend_php/data/*.json
+backend_php/data/.jwt_secret
+backend_php/data/*.sqlite
+backend_php/data/*.migrated
+var/
+/var/secure-vault/
+*.zip
 
 # Environment variables
 .env
@@ -21,3 +28,5 @@ backend_php/storage/*
 .DS_Store
 Thumbs.db
 *.log
+__pycache__/
+*.py[cod]

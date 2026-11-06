@@ -28,6 +28,8 @@ export interface EncryptedFile {
   encrypted_tags?: string;
   tags?: string[];
   created_at: string;
+  upload_status?: 'uploading' | 'completed';
+  completed_at?: string;
 }
 
 export interface AuditLogEntry {
@@ -40,6 +42,8 @@ export interface AuditLogEntry {
   ip_address: string;
   user_agent?: string;
   status: 'SUCCESS' | 'FAILED';
+  details?: string | null;
+  hash_version?: number;
   previous_hash: string;
   current_hash: string;
   is_valid_chain?: boolean;

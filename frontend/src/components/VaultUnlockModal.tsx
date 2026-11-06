@@ -25,8 +25,8 @@ export const VaultUnlockModal: React.FC<VaultUnlockModalProps> = ({
   onClose,
   onUnlocked,
 }) => {
-  const [passphrase, setPassphrase] = useState('securePassphrase2026!');
-  const [confirmPassphrase, setConfirmPassphrase] = useState('securePassphrase2026!');
+  const [passphrase, setPassphrase] = useState('');
+  const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [isInitializing, setIsInitializing] = useState(false);
   const [profileExists, setProfileExists] = useState(false);
   const [argon2SaltB64, setArgon2SaltB64] = useState('');
@@ -41,7 +41,14 @@ export const VaultUnlockModal: React.FC<VaultUnlockModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
+      setPassphrase('');
+      setConfirmPassphrase('');
+      setError(null);
       checkVaultProfile();
+    } else {
+      setPassphrase('');
+      setConfirmPassphrase('');
+      setError(null);
     }
   }, [isOpen]);
 
@@ -139,10 +146,13 @@ export const VaultUnlockModal: React.FC<VaultUnlockModalProps> = ({
       const kek = await deriveKek(passphrase, salt);
 
       setStage('Menghasilkan Master Key 256-bit baru...');
-      const masterKey = await generateMasterKey();
+      const generatedMasterKey = await generateMasterKey();
 
       setStage('Membungkus Master Key dengan KEK (AES-KW)...');
-      const wrappedMk = await wrapMasterKey(masterKey, kek);
+      const wrappedMk = await wrapMasterKey(generatedMasterKey, kek);
+
+      // Re-import the just-wrapped key as non-extractable before keeping it in RAM.
+      const masterKey = await unwrapMasterKey(wrappedMk, kek);
 
       setStage('Membuat Encrypted Verifier String...');
       const verifier = await createVerifier(masterKey);
@@ -257,10 +267,7 @@ export const VaultUnlockModal: React.FC<VaultUnlockModalProps> = ({
         {profileExists ? (
           <form onSubmit={handleUnlock} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div className="input-group">
-              <label className="input-label">
-                <span>Passphrase Brankas</span>
-                <span style={{ color: 'var(--accent-cyan)' }}>Demo: securePassphrase2026!</span>
-              </label>
+              <label className="input-label">Passphrase Brankas</label>
               <input
                 type="password"
                 value={passphrase}

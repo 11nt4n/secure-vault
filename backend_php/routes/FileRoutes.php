@@ -9,12 +9,57 @@ require_once __DIR__ . '/../middleware/AuthMiddleware.php';
 
 class FileRoutes
 {
+    private const MAX_FILE_SIZE_BYTES = 524288000; // 500 MiB
+    private const CHUNK_SIZE_BYTES = 5242880;      // 5 MiB plaintext chunks
+    private const GCM_TAG_BYTES = 16;
+    private const MAX_METADATA_FIELD_BYTES = 16384;
+
+    private static function isCompleted(array $file): bool
+    {
+        // Backward compatibility: Stage 1 records did not carry upload_status.
+        return ($file['upload_status'] ?? 'completed') === 'completed';
+    }
+
+    private static function decodeBase64Field($value, int $maxBytes): ?string
+    {
+        if (!is_string($value) || $value === '' || strlen($value) > $maxBytes) return null;
+        $decoded = base64_decode($value, true);
+        if (!is_string($decoded) || base64_encode($decoded) !== $value) return null;
+        return $decoded;
+    }
+
+    /** Encrypted text values are encoded as ciphertextB64:ivB64 by the browser. */
+    private static function validEncryptedText($value): bool
+    {
+        if (!is_string($value) || strlen($value) > self::MAX_METADATA_FIELD_BYTES) return false;
+        $parts = explode(':', $value);
+        if (count($parts) !== 2) return false;
+        $ciphertext = self::decodeBase64Field($parts[0], self::MAX_METADATA_FIELD_BYTES);
+        $iv = self::decodeBase64Field($parts[1], 64);
+        return is_string($ciphertext) && strlen($ciphertext) >= self::GCM_TAG_BYTES
+            && is_string($iv) && strlen($iv) === 12;
+    }
+
+    private static function requireNotDeleting(array $file): void
+    {
+        if (!empty($file['deletion_pending'])) {
+            Response::error('Berkas sedang dalam proses penghapusan; akses ditangguhkan.', 409);
+        }
+    }
+
+    private static function requireCompleted(array $file): void
+    {
+        self::requireNotDeleting($file);
+        if (!self::isCompleted($file)) {
+            Response::error('Berkas belum lengkap diunggah.', 409);
+        }
+    }
+
     public static function list(): void
     {
         $user = AuthMiddleware::authenticate();
         $db = Database::getInstance();
-        $files = $db->getFilesByOwner($user['id']);
-
+        $files = $db->getFilesByOwner($user['id'], true);
         Response::json(['files' => $files]);
     }
 
@@ -23,21 +68,35 @@ class FileRoutes
         $user = AuthMiddleware::authenticate();
         $encryptedFileName = $body['encryptedFileName'] ?? null;
         $encryptedTags = $body['encryptedTags'] ?? null;
-        $fileSizeBytes = isset($body['fileSizeBytes']) ? (int)$body['fileSizeBytes'] : null;
-        $totalChunks = isset($body['totalChunks']) ? (int)$body['totalChunks'] : null;
         $wrappedDek = $body['wrappedDek'] ?? null;
-        $plaintextSha256 = $body['plaintextSha256'] ?? null;
+        $fileSizeBytes = $body['fileSizeBytes'] ?? null;
+        $totalChunks = $body['totalChunks'] ?? null;
 
-        if (!$encryptedFileName || !$fileSizeBytes || !$totalChunks || !$wrappedDek || !$plaintextSha256) {
-            Response::error('Metadata berkas tidak lengkap.', 400);
+        if (!is_int($fileSizeBytes) || !is_int($totalChunks)) {
+            Response::error('Ukuran berkas dan jumlah chunk harus berupa bilangan bulat.', 400);
         }
-
-        // Check quota
-        if (($user['storage_used_bytes'] + $fileSizeBytes) > $user['storage_quota_bytes']) {
-            Response::error('Kuota penyimpanan brankas Anda telah terlampaui.', 413);
+        if ($fileSizeBytes < 1 || $fileSizeBytes > self::MAX_FILE_SIZE_BYTES) {
+            Response::error('Ukuran berkas harus antara 1 byte dan 500 MiB.', 413);
+        }
+        $expectedChunks = (int)ceil($fileSizeBytes / self::CHUNK_SIZE_BYTES);
+        if ($totalChunks < 1 || $totalChunks > 100 || $totalChunks !== $expectedChunks) {
+            Response::error('Jumlah chunk tidak sesuai ukuran berkas atau melampaui batas.', 400);
+        }
+        if (!self::validEncryptedText($encryptedFileName) || !self::validEncryptedText($encryptedTags)) {
+            Response::error('Metadata nama berkas atau tag terenkripsi tidak valid.', 400);
+        }
+        $decodedWrappedDek = self::decodeBase64Field($wrappedDek, 256);
+        if (!is_string($decodedWrappedDek) || strlen($decodedWrappedDek) !== 40) {
+            Response::error('Kunci DEK terbungkus tidak valid.', 400);
         }
 
         $fileId = Database::generateUuid();
+        $fileDir = STORAGE_DIR . DIRECTORY_SEPARATOR . $fileId;
+        if (!mkdir($fileDir, 0700, true)) {
+            Response::error('Gagal menyiapkan direktori unggahan privat.', 500);
+        }
+        @chmod($fileDir, 0700);
+
         $newFile = [
             'id' => $fileId,
             'owner_id' => $user['id'],
@@ -46,21 +105,22 @@ class FileRoutes
             'file_size_bytes' => $fileSizeBytes,
             'total_chunks' => $totalChunks,
             'wrapped_dek' => $wrappedDek,
-            'plaintext_sha256' => $plaintextSha256,
-            'created_at' => gmdate('Y-m-d\TH:i:s.000\Z')
+            'created_at' => gmdate('Y-m-d\\TH:i:s.000\\Z'),
         ];
 
         $db = Database::getInstance();
-        $db->addFile($newFile);
-
-        // Create storage directory for chunks
-        $fileDir = STORAGE_DIR . DIRECTORY_SEPARATOR . $fileId;
-        if (!is_dir($fileDir)) {
-            mkdir($fileDir, 0755, true);
+        $reserved = $db->transaction(function (Database $tx) use ($user, $newFile, $fileId, $fileSizeBytes, $totalChunks): bool {
+            $ok = $tx->addFileWithQuotaReservation($user['id'], $newFile);
+            if ($ok) {
+                Audit::logEvent($user['id'], 'FILE_INIT', $fileId, null, null, 'SUCCESS',
+                    "size_bytes={$fileSizeBytes};total_chunks={$totalChunks}");
+            }
+            return $ok;
+        });
+        if (!$reserved) {
+            @rmdir($fileDir);
+            Response::error('Kuota penyimpanan terlampaui atau akun tidak tersedia.', 413);
         }
-
-        Audit::logEvent($user['id'], 'FILE_INIT', $fileId, null, null, 'SUCCESS');
-
         Response::json(['fileId' => $fileId], 201);
     }
 
@@ -69,43 +129,102 @@ class FileRoutes
         $user = AuthMiddleware::authenticate();
         $db = Database::getInstance();
         $file = $db->getFileById($fileId);
-
         if (!$file || $file['owner_id'] !== $user['id']) {
             Response::error('Akses ditolak: Anda bukan pemilik berkas ini.', 403);
+        }
+        self::requireNotDeleting($file);
+        if (self::isCompleted($file)) {
+            Response::error('Berkas telah selesai diunggah dan tidak dapat diubah.', 409);
+        }
+        $totalChunks = (int)$file['total_chunks'];
+        if ($chunkIndex < 0 || $chunkIndex >= $totalChunks) {
+            Response::error('Indeks chunk berada di luar rentang yang diizinkan.', 400);
         }
 
         $ivBase64 = $_POST['ivBase64'] ?? '';
         $aadString = $_POST['aadString'] ?? '';
-
-        if (!isset($_FILES['chunkBlob']) || $_FILES['chunkBlob']['error'] !== UPLOAD_ERR_OK) {
-            Response::error('Data ciphertext chunk tidak ditemukan atau gagal diunggah.', 400);
+        $iv = self::decodeBase64Field($ivBase64, 64);
+        if (!is_string($iv) || strlen($iv) !== 12) {
+            Response::error('IV AES-GCM harus berupa Base64 kanonis sepanjang 12 byte.', 400);
         }
+        if (!is_string($aadString) || !hash_equals("{$fileId}-{$chunkIndex}", $aadString)) {
+            Response::error('AAD chunk tidak sesuai dengan ID berkas dan indeksnya.', 400);
+        }
+        if (!isset($_FILES['chunkBlob']) || !is_array($_FILES['chunkBlob'])) {
+            Response::error('Data ciphertext chunk tidak ditemukan.', 400);
+        }
+        $upload = $_FILES['chunkBlob'];
+        $uploadError = $upload['error'] ?? UPLOAD_ERR_NO_FILE;
+        $temporaryUpload = $upload['tmp_name'] ?? null;
+        if (!is_int($uploadError) || !is_string($temporaryUpload)
+            || $uploadError !== UPLOAD_ERR_OK || !is_uploaded_file($temporaryUpload)) {
+            $code = is_int($uploadError) ? $uploadError : UPLOAD_ERR_NO_FILE;
+            Response::error('Data ciphertext chunk gagal diunggah (kode ' . $code . ').', $code === UPLOAD_ERR_INI_SIZE || $code === UPLOAD_ERR_FORM_SIZE ? 413 : 400);
+        }
+
+        $plainOffset = $chunkIndex * self::CHUNK_SIZE_BYTES;
+        $expectedPlainLength = min(self::CHUNK_SIZE_BYTES, (int)$file['file_size_bytes'] - $plainOffset);
+        $expectedCipherLength = $expectedPlainLength + self::GCM_TAG_BYTES;
+        $incomingSize = filesize($upload['tmp_name']);
+        if (!is_int($incomingSize) || $incomingSize !== $expectedCipherLength) {
+            Response::error('Ukuran ciphertext chunk tidak sesuai ukuran plaintext dan tag AES-GCM.', 413);
+        }
+        $incomingHash = hash_file('sha256', $upload['tmp_name']);
+        if (!is_string($incomingHash)) Response::error('Gagal menghitung integritas chunk.', 500);
 
         $fileDir = STORAGE_DIR . DIRECTORY_SEPARATOR . $fileId;
-        if (!is_dir($fileDir)) {
-            mkdir($fileDir, 0755, true);
+        if (!is_dir($fileDir) && !mkdir($fileDir, 0700, true) && !is_dir($fileDir)) {
+            Response::error('Gagal menyiapkan direktori chunk privat.', 500);
         }
-
+        @chmod($fileDir, 0700);
         $chunkPath = $fileDir . DIRECTORY_SEPARATOR . "chunk_{$chunkIndex}.bin";
-        if (!move_uploaded_file($_FILES['chunkBlob']['tmp_name'], $chunkPath)) {
-            Response::error('Gagal menyimpan berkas chunk ke server.', 500);
+        $existingChunk = $db->getChunk($fileId, $chunkIndex);
+        if ($existingChunk) {
+            $oldPath = $chunkPath;
+            $oldHash = is_file($oldPath) ? hash_file('sha256', $oldPath) : false;
+            $same = is_string($oldHash)
+                && hash_equals($oldHash, $incomingHash)
+                && (int)$existingChunk['chunk_size_bytes'] === $incomingSize
+                && hash_equals((string)$existingChunk['iv_base64'], $ivBase64)
+                && hash_equals((string)$existingChunk['aad_string'], $aadString);
+            if ($same) Response::json(['message' => "Chunk #{$chunkIndex} sudah tersimpan.", 'alreadyStored' => true], 200);
+            Response::error('Chunk dengan indeks ini sudah ada dengan isi berbeda.', 409);
         }
 
-        $chunkSize = filesize($chunkPath);
+        $temporaryPath = $fileDir . DIRECTORY_SEPARATOR . '.chunk_' . $chunkIndex . '.' . bin2hex(random_bytes(8)) . '.tmp';
+        if (!move_uploaded_file($upload['tmp_name'], $temporaryPath)) {
+            Response::error('Gagal menyimpan chunk terenkripsi.', 500);
+        }
+        @chmod($temporaryPath, 0600);
+        if (!rename($temporaryPath, $chunkPath)) {
+            @unlink($temporaryPath);
+            Response::error('Gagal memfinalisasi penyimpanan chunk.', 500);
+        }
+        @chmod($chunkPath, 0600);
 
         $chunkRow = [
             'id' => Database::generateUuid(),
             'file_id' => $fileId,
             'chunk_index' => $chunkIndex,
-            'chunk_size_bytes' => $chunkSize,
-            'iv_base64' => (string)$ivBase64,
-            'aad_string' => (string)$aadString,
+            'chunk_size_bytes' => $incomingSize,
+            'sha256_ciphertext' => $incomingHash,
+            'iv_base64' => $ivBase64,
+            'aad_string' => $aadString,
             'storage_path' => $chunkPath,
-            'created_at' => gmdate('Y-m-d\TH:i:s.000\Z')
+            'created_at' => gmdate('Y-m-d\\TH:i:s.000\\Z'),
         ];
-
-        $db->saveChunk($chunkRow);
-
+        try {
+            $db->transaction(function (Database $tx) use ($chunkRow, $user, $fileId, $chunkIndex, $incomingSize): void {
+                $tx->saveChunk($chunkRow);
+                Audit::logEvent($user['id'], 'FILE_CHUNK_UPLOAD', $fileId, null, null, 'SUCCESS',
+                    "chunk_index={$chunkIndex};ciphertext_bytes={$incomingSize}");
+            });
+        } catch (Throwable $e) {
+            // The DB transaction did not commit, so remove the newly installed object.
+            @unlink($chunkPath);
+            error_log('Secure Vault chunk metadata commit failed: ' . $e->getMessage());
+            Response::error('Metadata chunk gagal disimpan; objek yang baru dipasang telah dibersihkan.', 500);
+        }
         Response::json(['message' => "Chunk #{$chunkIndex} berhasil disimpan."], 201);
     }
 
@@ -114,18 +233,56 @@ class FileRoutes
         $user = AuthMiddleware::authenticate();
         $db = Database::getInstance();
         $file = $db->getFileById($fileId);
-
-        if (!$file || $file['owner_id'] !== $user['id']) {
-            Response::error('Akses ditolak.', 403);
+        if (!$file || $file['owner_id'] !== $user['id']) Response::error('Berkas tidak ditemukan atau akses ditolak.', 404);
+        self::requireNotDeleting($file);
+        if (self::isCompleted($file)) {
+            Response::json(['message' => 'Pengunggahan berkas sudah selesai sebelumnya.', 'alreadyCompleted' => true]);
         }
 
-        // Update storage used
-        $newUsed = $user['storage_used_bytes'] + $file['file_size_bytes'];
-        $db->updateUser($user['id'], ['storage_used_bytes' => $newUsed]);
+        $size = (int)$file['file_size_bytes'];
+        $totalChunks = (int)$file['total_chunks'];
+        if ($size < 1 || $size > self::MAX_FILE_SIZE_BYTES || $totalChunks !== (int)ceil($size / self::CHUNK_SIZE_BYTES)) {
+            Response::error('Metadata unggahan tidak konsisten; unggahan tidak dapat difinalisasi.', 409);
+        }
+        $chunks = $db->getChunksByFile($fileId);
+        if (count($chunks) !== $totalChunks) {
+            Response::error('Unggahan belum lengkap: jumlah chunk tersimpan tidak sesuai.', 409);
+        }
+        for ($i = 0; $i < $totalChunks; $i++) {
+            $chunk = $chunks[$i] ?? null;
+            if (!is_array($chunk) || (int)$chunk['chunk_index'] !== $i) {
+                Response::error('Unggahan belum lengkap: indeks chunk hilang atau berulang.', 409);
+            }
+            $expectedPlainLength = min(self::CHUNK_SIZE_BYTES, $size - ($i * self::CHUNK_SIZE_BYTES));
+            $expectedCipherLength = $expectedPlainLength + self::GCM_TAG_BYTES;
+            $path = STORAGE_DIR . DIRECTORY_SEPARATOR . $fileId . DIRECTORY_SEPARATOR . "chunk_{$i}.bin";
+            $actualSize = is_file($path) ? filesize($path) : false;
+            if (!is_int($actualSize) || $actualSize !== $expectedCipherLength || (int)$chunk['chunk_size_bytes'] !== $expectedCipherLength) {
+                Response::error("Unggahan belum lengkap: chunk #{$i} tidak memiliki ukuran yang benar.", 409);
+            }
+            if (!empty($chunk['sha256_ciphertext'])) {
+                $actualHash = hash_file('sha256', $path);
+                if (!is_string($actualHash) || !hash_equals((string)$chunk['sha256_ciphertext'], $actualHash)) {
+                    Audit::logEvent($user['id'], 'FILE_UPLOAD_INTEGRITY_FAILURE', $fileId, null, null, 'FAILED', "chunk_index={$i}");
+                    Response::error("Integritas chunk #{$i} gagal diverifikasi.", 409);
+                }
+            }
+        }
 
-        Audit::logEvent($user['id'], 'FILE_UPLOAD_COMPLETE', $fileId, null, null, 'SUCCESS');
-
-        Response::json(['message' => 'Pengunggahan berkas terenkripsi selesai.']);
+        $result = $db->transaction(function (Database $tx) use ($fileId, $user, $totalChunks, $size): string {
+            $status = $tx->markUploadComplete($fileId, $user['id']);
+            if ($status === 'completed') {
+                // Quota was reserved at init; completion does not charge it a second time.
+                Audit::logEvent($user['id'], 'FILE_UPLOAD_COMPLETE', $fileId, null, null, 'SUCCESS',
+                    "total_chunks={$totalChunks};file_size_bytes={$size}");
+            }
+            return $status;
+        });
+        if ($result === 'already_completed') {
+            Response::json(['message' => 'Pengunggahan berkas sudah selesai sebelumnya.', 'alreadyCompleted' => true]);
+        }
+        if ($result !== 'completed') Response::error('Status unggahan tidak valid.', 409);
+        Response::json(['message' => 'Pengunggahan berkas terenkripsi selesai.', 'alreadyCompleted' => false]);
     }
 
     public static function getChunkMeta(string $fileId, int $chunkIndex): void
@@ -133,20 +290,15 @@ class FileRoutes
         $user = AuthMiddleware::authenticate();
         $db = Database::getInstance();
         $file = $db->getFileById($fileId);
-
-        if (!$file || $file['owner_id'] !== $user['id']) {
-            Response::error('Akses ditolak.', 403);
-        }
-
+        if (!$file || $file['owner_id'] !== $user['id']) Response::error('Akses ditolak.', 403);
+        self::requireCompleted($file);
+        if ($chunkIndex < 0 || $chunkIndex >= (int)$file['total_chunks']) Response::error('Indeks chunk tidak valid.', 400);
         $chunk = $db->getChunk($fileId, $chunkIndex);
-        if (!$chunk) {
-            Response::error("Metadata chunk #{$chunkIndex} tidak ditemukan.", 404);
-        }
-
+        if (!$chunk) Response::error("Metadata chunk #{$chunkIndex} tidak ditemukan.", 404);
         Response::json([
             'ivBase64' => $chunk['iv_base64'],
             'aadString' => $chunk['aad_string'],
-            'chunkSizeBytes' => (int)$chunk['chunk_size_bytes']
+            'chunkSizeBytes' => (int)$chunk['chunk_size_bytes'],
         ]);
     }
 
@@ -155,20 +307,21 @@ class FileRoutes
         $user = AuthMiddleware::authenticate();
         $db = Database::getInstance();
         $file = $db->getFileById($fileId);
-
-        if (!$file || $file['owner_id'] !== $user['id']) {
-            Response::error('Akses ditolak.', 403);
-        }
-
+        if (!$file || $file['owner_id'] !== $user['id']) Response::error('Akses ditolak.', 403);
+        self::requireCompleted($file);
+        if ($chunkIndex < 0 || $chunkIndex >= (int)$file['total_chunks']) Response::error('Indeks chunk tidak valid.', 400);
+        $chunk = $db->getChunk($fileId, $chunkIndex);
+        if (!$chunk) Response::error("Chunk #{$chunkIndex} tidak ditemukan.", 404);
         $chunkPath = STORAGE_DIR . DIRECTORY_SEPARATOR . $fileId . DIRECTORY_SEPARATOR . "chunk_{$chunkIndex}.bin";
-        if (!file_exists($chunkPath)) {
-            Response::error("File chunk #{$chunkIndex} tidak ditemukan di storage.", 404);
+        if (!is_file($chunkPath)) Response::error("File chunk #{$chunkIndex} tidak ditemukan di storage.", 404);
+        if (!empty($chunk['sha256_ciphertext'])) {
+            $actualHash = hash_file('sha256', $chunkPath);
+            if (!is_string($actualHash) || !hash_equals((string)$chunk['sha256_ciphertext'], $actualHash)) {
+                Audit::logEvent($user['id'], 'FILE_DOWNLOAD_INTEGRITY_FAILURE', $fileId, null, null, 'FAILED', "chunk_index={$chunkIndex}");
+                Response::error('Integritas ciphertext gagal diverifikasi; unduhan dihentikan.', 409);
+            }
         }
-
-        if ($chunkIndex === 0) {
-            Audit::logEvent($user['id'], 'FILE_DOWNLOAD', $fileId, null, null, 'SUCCESS');
-        }
-
+        if ($chunkIndex === 0) Audit::logEvent($user['id'], 'FILE_DOWNLOAD', $fileId, null, null, 'SUCCESS');
         Response::streamBinary($chunkPath);
     }
 
@@ -177,23 +330,27 @@ class FileRoutes
         $user = AuthMiddleware::authenticate();
         $db = Database::getInstance();
         $file = $db->getFileById($fileId);
-
-        if (!$file || $file['owner_id'] !== $user['id']) {
-            Response::error('Akses ditolak.', 403);
-        }
+        if (!$file || $file['owner_id'] !== $user['id']) Response::error('Akses ditolak.', 403);
+        self::requireCompleted($file);
 
         $updates = [];
-        if (isset($body['encryptedFileName'])) {
+        $changed = [];
+        if (array_key_exists('encryptedFileName', $body)) {
+            if (!self::validEncryptedText($body['encryptedFileName'])) Response::error('Format nama berkas terenkripsi tidak valid.', 400);
             $updates['encrypted_file_name'] = $body['encryptedFileName'];
+            $changed[] = 'name';
         }
-        if (isset($body['encryptedTags'])) {
+        if (array_key_exists('encryptedTags', $body)) {
+            if (!self::validEncryptedText($body['encryptedTags'])) Response::error('Format tag terenkripsi tidak valid.', 400);
             $updates['encrypted_tags'] = $body['encryptedTags'];
+            $changed[] = 'tags';
         }
-
-        if (!empty($updates)) {
-            $db->updateFile($fileId, $updates);
-        }
-
+        if (!$updates) Response::error('Tidak ada metadata yang valid untuk diperbarui.', 400);
+        $db->transaction(function (Database $tx) use ($fileId, $updates, $user, $changed): void {
+            $tx->updateFile($fileId, $updates);
+            Audit::logEvent($user['id'], 'FILE_METADATA_UPDATE', $fileId, null, null, 'SUCCESS',
+                'fields=' . implode(',', $changed));
+        });
         Response::json(['message' => 'Metadata berkas berhasil diperbarui.']);
     }
 
@@ -202,34 +359,47 @@ class FileRoutes
         $user = AuthMiddleware::authenticate();
         $db = Database::getInstance();
         $file = $db->getFileById($fileId);
+        if (!$file) Response::error('Berkas tidak ditemukan.', 404);
+        if ($file['owner_id'] !== $user['id']) Response::error('Akses ditolak: hanya pemilik berkas yang dapat menghapus.', 403);
 
-        if (!$file) {
-            Response::error('Berkas tidak ditemukan.', 404);
+        $fileSize = (int)$file['file_size_bytes'];
+        $wasCompleted = self::isCompleted($file);
+
+        // Mark unavailable before touching the filesystem. A retry resumes cleanup.
+        if (empty($file['deletion_pending'])) {
+            $db->transaction(function (Database $tx) use ($fileId, $user, $fileSize): void {
+                $tx->markFileDeletionPending($fileId);
+                Audit::logEvent($user['id'], 'FILE_DELETE_PENDING', $fileId, null, null, 'SUCCESS',
+                    "file_size_bytes={$fileSize}");
+            });
         }
 
-        if ($file['owner_id'] !== $user['id']) {
-            Response::error('Akses ditolak: Hanya pemilik berkas yang dapat menghapus.', 403);
-        }
-
-        // Delete physical chunks from disk
         $fileDir = STORAGE_DIR . DIRECTORY_SEPARATOR . $fileId;
-        if (is_dir($fileDir)) {
-            $files = glob($fileDir . DIRECTORY_SEPARATOR . '*');
-            foreach ($files as $f) {
-                if (is_file($f)) unlink($f);
+        if (is_link($fileDir)) {
+            if (!unlink($fileDir)) Response::error('Penghapusan ditandai tertunda; tautan storage tidak dapat dilepas. Periksa izin lalu ulangi DELETE.', 500);
+        } elseif (is_file($fileDir)) {
+            if (!unlink($fileDir)) Response::error('Penghapusan ditandai tertunda; objek storage tidak dapat dilepas. Periksa izin lalu ulangi DELETE.', 500);
+        } elseif (is_dir($fileDir)) {
+            $entries = scandir($fileDir);
+            if (!is_array($entries)) Response::error('Penghapusan ditandai tertunda, tetapi direktori storage tidak dapat dibaca. Ulangi DELETE untuk melanjutkan.', 500);
+            foreach ($entries as $entry) {
+                if ($entry === '.' || $entry === '..') continue;
+                $path = $fileDir . DIRECTORY_SEPARATOR . $entry;
+                if ((is_file($path) || is_link($path)) && !unlink($path)) {
+                    Response::error('Penghapusan ditandai tertunda; objek storage belum dapat dihapus. Perbaiki izin lalu ulangi DELETE.', 500);
+                }
+                if (is_dir($path)) Response::error('Penghapusan ditandai tertunda; ditemukan subdirektori tidak dikenal. Pemeriksaan manual diperlukan.', 500);
             }
-            rmdir($fileDir);
+            if (!rmdir($fileDir)) Response::error('Penghapusan ditandai tertunda; direktori storage belum dapat dihapus. Ulangi DELETE setelah memeriksa izin.', 500);
         }
 
-        // Reduce user storage
-        $newUsed = max(0, $user['storage_used_bytes'] - $file['file_size_bytes']);
-        $db->updateUser($user['id'], ['storage_used_bytes' => $newUsed]);
-
-        // Remove from database
-        $db->deleteFile($fileId);
-
-        Audit::logEvent($user['id'], 'FILE_DELETE', $fileId, null, null, 'SUCCESS');
-
-        Response::json(['message' => 'Berkas dan seluruh chunk terenkripsi berhasil dimusnahkan secara aman.']);
+        // Commit metadata removal, quota release, and the final audit event together.
+        $db->transaction(function (Database $tx) use ($fileId, $user, $fileSize, $wasCompleted): void {
+            $tx->deleteFileAndReleaseQuota($fileId);
+            Audit::logEvent($user['id'], 'FILE_DELETE', $fileId, null, null, 'SUCCESS',
+                "file_size_bytes={$fileSize};upload_status=" . ($wasCompleted ? 'completed' : 'uploading'));
+        });
+        Response::json(['message' => 'Berkas dan metadata chunk telah dihapus dari penyimpanan aplikasi.']);
     }
+
 }

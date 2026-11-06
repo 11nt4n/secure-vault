@@ -1,14 +1,25 @@
-# Apache URL Rewrite for Secure Vault PHP API
+# Apache controls for the PHP API. Runtime data is stored outside this directory.
+Options -Indexes
+
 <IfModule mod_rewrite.c>
     RewriteEngine On
+    # Deny accidental exposure of configuration, data, backups and repository files.
+    RewriteRule (^|/)(\.git|\.env|var|storage|data)(/|$) - [F,L,NC]
+    RewriteRule \.(json|log|sql|bak|old|env|ya?ml)$ - [F,L,NC]
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteRule ^(.*)$ index.php [QSA,L]
 </IfModule>
 
-# Security Headers
 <IfModule mod_headers.c>
-    Header set X-Content-Type-Options "nosniff"
-    Header set X-Frame-Options "DENY"
-    Header set X-XSS-Protection "1; mode=block"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    Header always set Content-Security-Policy "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+    Header always set Cache-Control "no-store"
 </IfModule>
+
+<FilesMatch "^(config\.php|\.htaccess|README\.md)$">
+    Require all denied
+</FilesMatch>

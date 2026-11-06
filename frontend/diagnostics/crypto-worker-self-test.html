@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Secure Vault V9 · Crypto Worker Test</title>
+  <link rel="stylesheet" href="../styles.css?v=9">
+</head>
+<body>
+  <main class="container page-container">
+    <section class="glass-card login-card">
+      <h1>Crypto Worker Self-Test</h1>
+      <p>Pengujian ini memakai data acak sementara, tidak memakai passphrase atau file pengguna, dan tidak mengirim data ke backend.</p>
+      <button id="run-test" class="btn btn-primary" type="button">Jalankan tes</button>
+      <pre id="result" role="status" aria-live="polite">Belum dijalankan.</pre>
+    </section>
+  </main>
+  <script type="module" src="./crypto-worker-self-test.js?v=9"></script>
+</body>
+</html>

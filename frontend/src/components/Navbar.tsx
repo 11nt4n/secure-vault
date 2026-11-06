@@ -60,16 +60,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             }}
           />
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ fontSize: '1.25rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <span style={{ fontSize: '1.3rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>
                 SECURE<span style={{ color: 'var(--accent-cyan)' }}>VAULT</span>
               </span>
-              <span className="badge badge-cyan" style={{ fontSize: '0.65rem', padding: '0.15rem 0.5rem' }}>
-                BSSN &bull; CERT
-              </span>
             </div>
-            <p style={{ fontSize: '0.725rem', color: 'var(--text-muted)', letterSpacing: '0.01em' }}>
-              Pusat Sertifikasi Teknologi Keamanan Siber & Sandi &bull; ISO/IEC 15408
+            <p style={{ fontSize: '0.735rem', color: 'var(--text-muted)', letterSpacing: '0.01em', marginTop: '0.18rem' }}>
+              Encrypted File Storage &bull; Zero-Knowledge Architecture
             </p>
           </div>
         </div>
@@ -192,11 +189,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <LogOut size={15} />
               </button>
             </>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span className="badge badge-cyan">Zero-Knowledge V1.0</span>
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
     </header>

@@ -49,7 +49,13 @@ class AdminRoutes
 
         $totalUsers = count($users);
         $totalFiles = count($allFiles);
-        $totalBytes = array_reduce($allFiles, fn($acc, $f) => $acc + (int)$f['file_size_bytes'], 0);
+        // Sum stored ciphertext chunk lengths (including each AES-GCM tag), not plaintext file sizes.
+        $totalBytes = 0;
+        foreach ($allFiles as $file) {
+            foreach ($db->getChunksByFile((string)$file['id']) as $chunk) {
+                $totalBytes += max(0, (int)($chunk['chunk_size_bytes'] ?? 0));
+            }
+        }
         $chainCheck = Audit::verifyChain();
 
         Response::json([
@@ -68,9 +74,9 @@ class AdminRoutes
         $admin = AuthMiddleware::authenticate();
         AuthMiddleware::requireAdmin($admin);
 
-        $quota = isset($body['storageQuotaBytes']) ? (float)$body['storageQuotaBytes'] : null;
-        if ($quota === null) {
-            Response::error('Parameter storageQuotaBytes wajib disertakan.', 400);
+        $quota = $body['storageQuotaBytes'] ?? null;
+        if (!is_int($quota) || $quota < 1 || $quota > 5497558138880) {
+            Response::error('storageQuotaBytes harus bilangan bulat antara 1 byte dan 5 TiB.', 400);
         }
 
         $db = Database::getInstance();
@@ -78,10 +84,13 @@ class AdminRoutes
         if (!$targetUser) {
             Response::error('Pengguna tidak ditemukan.', 404);
         }
+        if ($quota < (int)$targetUser['storage_used_bytes']) {
+            Response::error('Kuota baru tidak boleh lebih kecil daripada penggunaan penyimpanan saat ini.', 409);
+        }
 
         $db->updateUser($targetUserId, ['storage_quota_bytes' => $quota]);
-
-        Audit::logEvent($admin['id'], 'ADMIN_UPDATE_QUOTA', null, null, null, 'SUCCESS');
+        Audit::logEvent($admin['id'], 'ADMIN_UPDATE_QUOTA', null, null, null, 'SUCCESS',
+            "target_user_id={$targetUserId};quota_bytes={$quota}");
 
         Response::json(['message' => 'Alokasi kuota pengguna berhasil diperbarui.']);
     }
@@ -101,7 +110,10 @@ class AdminRoutes
             Response::error('Administrator tidak dapat mencabut sesi dirinya sendiri.', 400);
         }
 
-        $db->updateUser($targetUserId, ['is_active' => false]);
+        // Revoke current bearer tokens without silently disabling the account.
+        $db->updateUser($targetUserId, [
+            'session_version' => (int)($targetUser['session_version'] ?? 0) + 1,
+        ]);
 
         Audit::logEvent($admin['id'], 'ADMIN_REVOKE_USER_SESSION', null, null, null, 'SUCCESS');
 

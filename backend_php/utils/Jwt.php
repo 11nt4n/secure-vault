@@ -1,5 +1,5 @@
 <?php
-// backend_php/utils/Jwt.php
+// Minimal HS256 JWT implementation with strict header and claim validation.
 
 class Jwt
 {
@@ -8,58 +8,79 @@ class Jwt
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
 
-    private static function base64UrlDecode(string $data): string
+    private static function base64UrlDecode(string $data): string|false
     {
-        return base64_decode(strtr($data, '-_', '+/'));
+        if ($data === '' || preg_match('/[^A-Za-z0-9_\-]/', $data)) {
+            return false;
+        }
+        $padded = strtr($data, '-_', '+/');
+        $padded .= str_repeat('=', (4 - strlen($padded) % 4) % 4);
+        return base64_decode($padded, true);
     }
 
-    /**
-     * Sign a JWT token with HMAC-SHA256
-     */
     public static function sign(array $payload, string $secret, int $expiresInSeconds = 900): string
     {
+        if (strlen($secret) < 32) {
+            throw new InvalidArgumentException('JWT signing key must be at least 32 bytes.');
+        }
         $header = ['alg' => 'HS256', 'typ' => 'JWT'];
-        
-        $payload['iat'] = time();
-        $payload['exp'] = time() + $expiresInSeconds;
+        $now = time();
+        $payload['iat'] = $now;
+        $payload['exp'] = $now + max(1, $expiresInSeconds);
 
-        $encodedHeader = self::base64UrlEncode(json_encode($header));
-        $encodedPayload = self::base64UrlEncode(json_encode($payload));
+        $headerJson = json_encode($header, JSON_UNESCAPED_SLASHES);
+        $payloadJson = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($headerJson === false || $payloadJson === false) {
+            throw new RuntimeException('Unable to encode JWT.');
+        }
 
+        $encodedHeader = self::base64UrlEncode($headerJson);
+        $encodedPayload = self::base64UrlEncode($payloadJson);
         $signature = hash_hmac('sha256', "{$encodedHeader}.{$encodedPayload}", $secret, true);
-        $encodedSignature = self::base64UrlEncode($signature);
-
-        return "{$encodedHeader}.{$encodedPayload}.{$encodedSignature}";
+        return "{$encodedHeader}.{$encodedPayload}." . self::base64UrlEncode($signature);
     }
 
-    /**
-     * Verify and decode a JWT token
-     */
     public static function verify(string $token, string $secret): ?array
     {
+        if (strlen($secret) < 32 || strlen($token) > 8192) {
+            return null;
+        }
         $parts = explode('.', $token);
         if (count($parts) !== 3) {
             return null;
         }
-
         [$encodedHeader, $encodedPayload, $encodedSignature] = $parts;
-
-        $expectedSig = hash_hmac('sha256', "{$encodedHeader}.{$encodedPayload}", $secret, true);
-        $expectedEncodedSig = self::base64UrlEncode($expectedSig);
-
-        if (!hash_equals($expectedEncodedSig, $encodedSignature)) {
-            return null; // Invalid signature
-        }
-
-        $payload = json_decode(self::base64UrlDecode($encodedPayload), true);
-        if (!$payload || !is_array($payload)) {
+        $headerJson = self::base64UrlDecode($encodedHeader);
+        $payloadJson = self::base64UrlDecode($encodedPayload);
+        $signature = self::base64UrlDecode($encodedSignature);
+        if (!is_string($headerJson) || !is_string($payloadJson) || !is_string($signature)) {
             return null;
         }
 
-        if (isset($payload['exp']) && $payload['exp'] < time()) {
-            return null; // Expired
+        $header = json_decode($headerJson, true);
+        $payload = json_decode($payloadJson, true);
+        if (!is_array($header) || ($header['alg'] ?? null) !== 'HS256' || ($header['typ'] ?? null) !== 'JWT') {
+            return null;
+        }
+        if (!is_array($payload) || !isset($payload['id'], $payload['iat'], $payload['exp'])) {
+            return null;
+        }
+        if (!is_string($payload['id']) || !is_numeric($payload['iat']) || !is_numeric($payload['exp'])) {
+            return null;
         }
 
+        $expected = hash_hmac('sha256', "{$encodedHeader}.{$encodedPayload}", $secret, true);
+        if (!hash_equals($expected, $signature)) {
+            return null;
+        }
+
+        $now = time();
+        if ((int)$payload['exp'] <= $now || (int)$payload['iat'] > $now + 60 || (int)$payload['exp'] <= (int)$payload['iat']) {
+            return null;
+        }
+        if (isset($payload['nbf']) && (!is_numeric($payload['nbf']) || (int)$payload['nbf'] > $now)) {
+            return null;
+        }
         return $payload;
     }
 }

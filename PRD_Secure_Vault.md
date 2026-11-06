@@ -312,7 +312,7 @@ Pengguna Pilih Berkas (cth: 12 MB)
     ├──> [Chunk 2]: Generate IV-2 (96-bit) | AAD = "fileId-2"
     │    Encrypt(Chunk-2, DEK, IV-2, AAD) ──> POST /api/files/:id/chunk/2 (Ciphertext + IV + Tag)
     │
-    └──> Selesai: Kirim metadata terenkripsi (nama file, tags, SHA-256 plaintext) ──> Catat Audit Log
+    └──> Selesai: Kirim metadata terenkripsi (nama file dan tags), ukuran, jumlah chunk, dan wrapped DEK ──> Catat Audit Log
 ```
 
 ### 8.3 Alur Pengunduhan & Rekonstruksi Berkas (Chunked Download Flow)
@@ -320,14 +320,17 @@ Pengguna Pilih Berkas (cth: 12 MB)
 2. Master Key (di RAM) mendekripsi *wrapped* DEK via AES-KW sehingga DEK mentah siap di RAM.
 3. Peramban mengunduh *chunks* terenkripsi secara bertahap (`chunk 0` s/d `chunk N-1`).
 4. Untuk setiap *chunk*, Web Crypto API mendekripsi *ciphertext* menggunakan DEK, IV spesifik *chunk*, dan memvalidasi `AAD = "${file_id}-${chunk_index}"`.
-5. Jika validasi autentikasi GCM sukses, *plaintext chunk* disimpan ke dalam *stream buffer* di memori.
-6. Setelah seluruh *chunk* didekripsi, peramban menghitung nilai *hash* SHA-256 dari gabungan *buffer* dan mencocokkannya dengan *hash* asli di metadata.
-7. Jika *hash* identik, peramban memicu dialog penyimpanan berkas lokal (`Blob` unduhan).
-8. Seluruh *buffer plaintext* dan DEK per-berkas dibersihkan dari memori.
+5. Jika validasi autentikasi GCM sukses, *plaintext chunk* diteruskan ke tujuan lokal tanpa mengumpulkan seluruh isi file di memori JavaScript jika File System Access API tersedia.
+6. Peramban menulis plaintext per chunk melalui `FileSystemWritableFileStream`, memvalidasi panjang setiap chunk dan ukuran total, lalu menutup writer setelah semua chunk berhasil.
+7. Browser yang tidak mendukung File System Access API memakai fallback `Blob` lokal; file besar meminta konfirmasi karena fallback dapat meningkatkan penggunaan RAM.
+8. Referensi buffer plaintext dan DEK per-berkas dilepas dari state aplikasi setelah proses selesai; penghapusan memori forensik tidak dijamin oleh JavaScript.
 
 ---
 
 ## 9. Struktur Basis Data & Rantai Hash Audit Trail
+
+> **Catatan implementasi V7 (meneruskan perubahan V6):** fingerprint SHA-256 plaintext tidak lagi dikirim atau disimpan oleh backend. Pada inisialisasi database, field legacy `plaintext_sha256` dihapus dari record aktif. Integritas konten diverifikasi melalui tag autentikasi AES-GCM pada setiap chunk dan AAD yang mengikat file serta indeks chunk. Status `deletion_pending` dipakai sebagai tombstone agar penghapusan filesystem dapat dilanjutkan setelah kegagalan parsial. Backup JSON lama yang disimpan terpisah perlu dirotasi sesuai kebijakan retensi organisasi.
+
 
 ### 9.1 Entitas Data Relasional Utama
 
@@ -353,7 +356,7 @@ CREATE TABLE encrypted_files (
     file_size_bytes BIGINT NOT NULL,
     total_chunks INT NOT NULL,
     wrapped_dek TEXT NOT NULL, -- DEK dibungkus Master Key via AES-KW
-    plaintext_sha256 VARCHAR(64) NOT NULL,
+    deletion_pending BOOLEAN NOT NULL DEFAULT FALSE, -- Tombstone untuk cleanup filesystem yang dapat dilanjutkan
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -456,3 +459,16 @@ Sistem dinyatakan lulus evaluasi rilis MVP apabila memenuhi seluruh kriteria ber
 - [x] Berkas terenkripsi diuji unduh dan hasil dekripsinya terbukti identik dengan berkas asli melalui pencocokan *hash* SHA-256.
 - [x] Administrator terbukti secara teknis tidak dapat mengunduh atau mendekripsi berkas pengguna.
 - [x] Laporan hasil pengujian penetrasi pra-rilis menunjukkan status **0 Critical Vulnerabilities** dan **0 High Vulnerabilities**.
+
+
+> **Status implementasi V7:** Operasi AES-GCM per chunk telah memakai ES Module Web Worker. Argon2id masih dijalankan pada main thread berdasarkan kompatibilitas runtime yang tersedia, sehingga persyaratan PRD yang mensyaratkan KDF dalam Worker belum terpenuhi. Unduhan streaming ke file lokal tersedia pada browser yang mendukung File System Access API; browser lain menggunakan fallback Blob. Ini merupakan status implementasi, bukan klaim bahwa seluruh NFR performa telah terukur atau terpenuhi.
+
+---
+
+## Catatan implementasi V9 / Iterasi 5 (4 November 2026)
+
+Build V9 memigrasikan penyimpanan aktif SQLite dari tabel generik `vault_records` ke enam tabel khusus entitas: `users`, `vault_profiles`, `encrypted_files`, `file_chunks`, `audit_logs`, dan `auth_rate_limits`. Skema menggunakan `PRAGMA user_version=2`, foreign key, indeks, constraint unik, serta operasi UPSERT per-record. Kolom JSON `payload` masih dipertahankan sementara sebagai lapisan kompatibilitas dengan service layer PHP; karena itu normalisasi penuh dan repository/DAO belum selesai.
+
+Migrasi membuat snapshot SQLite pra-migrasi dengan `VACUUM INTO`, memeriksa integritas snapshot, lalu melakukan impor dalam satu transaksi. Tabel `vault_records` baru dihapus setelah seluruh data berhasil dipindahkan. File ciphertext pada direktori storage tidak dipindahkan oleh migrasi database dan harus dicadangkan secara terpisah.
+
+Pengujian skema SQLite melalui Python telah lulus untuk foreign key, uniqueness, cascade, rollback, dan `integrity_check`. Pengujian adapter PHP/PDO dan API live belum dapat dijalankan pada lingkungan build karena ekstensi `pdo_sqlite` tidak tersedia. Global process lock juga masih dipertahankan; build V9 belum boleh diklaim memiliki skalabilitas multi-worker atau siap produksi.

@@ -395,6 +395,84 @@
             "status": "SUCCESS",
             "previous_hash": "e3eb268815c0eafec1bea05173cb44f175d1acff4fada2fa25a9ccf36c9c4a29",
             "current_hash": "5688fd91977f2c9fb7159aac8f96e80f2a68a2c4725892357fa9217b70a53d9f"
+        },
+        {
+            "id": "ae85b99b-154d-4015-988b-343a608f0a58",
+            "sequence_number": 28,
+            "timestamp": "2026-10-28T07:10:53.000Z",
+            "user_id": "884fc906-1932-4c97-86b5-da1a6eb9dcac",
+            "action_type": "AUTH_CREDENTIALS_VERIFIED",
+            "file_id": null,
+            "ip_address": "127.0.0.1",
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+            "status": "SUCCESS",
+            "previous_hash": "5688fd91977f2c9fb7159aac8f96e80f2a68a2c4725892357fa9217b70a53d9f",
+            "current_hash": "b9151d158a17700b4a5181c068e642a8b015a1d907a945672065ca9486b4e506"
+        },
+        {
+            "id": "7c790f8e-c003-4af4-b06d-4279d8ccb93d",
+            "sequence_number": 29,
+            "timestamp": "2026-10-28T07:10:54.000Z",
+            "user_id": "884fc906-1932-4c97-86b5-da1a6eb9dcac",
+            "action_type": "AUTH_MFA_SUCCESS",
+            "file_id": null,
+            "ip_address": "127.0.0.1",
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+            "status": "SUCCESS",
+            "previous_hash": "b9151d158a17700b4a5181c068e642a8b015a1d907a945672065ca9486b4e506",
+            "current_hash": "a8d925cd6544480de8e3084241aa3832e6426cce4794c746a1f5857459c4de92"
+        },
+        {
+            "id": "68b08d25-3fc3-42b9-a6e0-9ae924b6d159",
+            "sequence_number": 30,
+            "timestamp": "2026-10-28T07:48:03.000Z",
+            "user_id": "884fc906-1932-4c97-86b5-da1a6eb9dcac",
+            "action_type": "AUTH_CREDENTIALS_VERIFIED",
+            "file_id": null,
+            "ip_address": "127.0.0.1",
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+            "status": "SUCCESS",
+            "previous_hash": "a8d925cd6544480de8e3084241aa3832e6426cce4794c746a1f5857459c4de92",
+            "current_hash": "1b3ef9b369400b0e974e4a22a90b0eed56192ce970f6f1f2f73b65ddb5b483d5"
+        },
+        {
+            "id": "a771713f-5342-4c10-ba1d-578a4d9ea032",
+            "sequence_number": 31,
+            "timestamp": "2026-10-28T07:48:33.000Z",
+            "user_id": "884fc906-1932-4c97-86b5-da1a6eb9dcac",
+            "action_type": "AUTH_MFA_SUCCESS",
+            "file_id": null,
+            "ip_address": "127.0.0.1",
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+            "status": "SUCCESS",
+            "previous_hash": "1b3ef9b369400b0e974e4a22a90b0eed56192ce970f6f1f2f73b65ddb5b483d5",
+            "current_hash": "3bbf73d6fdc9b87f73ad560b4026977e0ef6212093e4d7e47a5c5cbbefcb7dfc"
+        },
+        {
+            "id": "925a8ee1-74ee-4924-9e81-d90a565455ab",
+            "sequence_number": 32,
+            "timestamp": "2026-10-28T07:58:39.000Z",
+            "user_id": "884fc906-1932-4c97-86b5-da1a6eb9dcac",
+            "action_type": "AUTH_CREDENTIALS_VERIFIED",
+            "file_id": null,
+            "ip_address": "127.0.0.1",
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+            "status": "SUCCESS",
+            "previous_hash": "3bbf73d6fdc9b87f73ad560b4026977e0ef6212093e4d7e47a5c5cbbefcb7dfc",
+            "current_hash": "f2f0c10f13c0ea1e5319ffe81229f7f8a30448f684cf082912ad6279029da869"
+        },
+        {
+            "id": "a44fd391-252d-42f4-b443-32aeecd866b6",
+            "sequence_number": 33,
+            "timestamp": "2026-10-28T07:58:41.000Z",
+            "user_id": "884fc906-1932-4c97-86b5-da1a6eb9dcac",
+            "action_type": "AUTH_MFA_SUCCESS",
+            "file_id": null,
+            "ip_address": "127.0.0.1",
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+            "status": "SUCCESS",
+            "previous_hash": "f2f0c10f13c0ea1e5319ffe81229f7f8a30448f684cf082912ad6279029da869",
+            "current_hash": "deee5357c47f4a293646eb4aa349f7e5d9e21210fae53f02665fbe6051459e1a"
         }
     ]
 }

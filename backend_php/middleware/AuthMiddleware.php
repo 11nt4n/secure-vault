@@ -31,6 +31,25 @@ class AuthMiddleware
             Response::error('Akun dinonaktifkan atau telah dicabut oleh administrator.', 401);
         }
 
+        if (!isset($payload['sv']) || !is_numeric($payload['sv'])
+            || (int)$payload['sv'] !== (int)($user['session_version'] ?? 0)) {
+            Response::error('Sesi telah dicabut. Silakan login kembali.', 401);
+        }
+
+        // Rotate the JWT on every authenticated API request. The frontend
+        // stores the replacement token from the exposed response header, so
+        // the 8-hour expiry is measured from the latest real API activity.
+        // session_version is re-checked above on every request, preserving
+        // immediate administrator revocation.
+        $renewedToken = Jwt::sign([
+            'id' => $user['id'],
+            'username' => $user['username'],
+            'email' => $user['email'],
+            'role' => $user['role'],
+            'sv' => (int)($user['session_version'] ?? 0),
+        ], JWT_SECRET, JWT_TTL_SECONDS);
+        header('X-Secure-Vault-Token: ' . $renewedToken);
+
         return $user;
     }
 
