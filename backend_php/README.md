@@ -32,7 +32,9 @@ php -d upload_max_filesize=8M -d post_max_size=10M -d max_execution_time=120 -d 
 ---
 
 ## 🔐 Registrasi, TOTP, dan administrator
-- Semua pendaftaran melalui API menetapkan `role=user`; nilai role dari browser diabaikan.
+- Pendaftaran publik ditolak. Administrator membuat akun dengan `POST /api/admin/users`; server menetapkan `role=user` dan mengirim tautan aktivasi sekali pakai melalui SMTP. Pengguna membuat kata sandi sendiri sebelum login dan OTP. Jika SMTP gagal, akun tidak dibuat.
+- Untuk Gmail, jalankan `configure_gmail_smtp.bat` dari root proyek; skrip menggunakan port 465/SSL, menyimpan App Password di direktori privat, dan mengirim email tes. Konfigurasi environment `SECURE_VAULT_SMTP_*` tetap didukung dan lebih diutamakan bila tersedia.
+- Pengguna membuka tautan aktivasi yang berlaku 24 jam, membuat kata sandi, kemudian login dan menyiapkan TOTP. Untuk deployment, `SECURE_VAULT_APP_URL` harus mengarah ke URL HTTPS aplikasi yang dapat dibuka pengguna. Konsol admin menampilkan status verifikasi email secara terpisah dari status aktif akun.
 - Login pertama menampilkan QR TOTP lokal di browser (tanpa layanan QR pihak ketiga), dengan secret manual sebagai opsi cadangan. JWT hanya diterbitkan sesudah kode TOTP valid.
 - Secret TOTP dienkripsi di database runtime memakai `MFA_ENCRYPTION_KEY`.
 - Tidak ada akun demo atau MFA universal.
@@ -48,7 +50,7 @@ python backend_php/tests/security_stage1.py
 python backend_php/tests/security_stage2.py
 find backend_php -name '*.php' -print0 | xargs -0 -n1 php -l
 ```
-Tes regresi memulai API lokal dengan direktori data sementara dan memvalidasi pendaftaran peran, enrollment/verifikasi TOTP, hashing password, akses admin, klaim JWT, CORS, unggah/kuota, idempotensi, serta audit. Kedua suite melakukan preflight `pdo_sqlite` dan melaporkan status BLOCKED secara eksplisit jika ekstensi tidak aktif. Tes belum menggantikan audit keamanan independen.
+Tes regresi memulai API lokal dengan direktori data sementara dan memvalidasi autentikasi, enrollment/verifikasi TOTP, hashing password, akses admin, klaim JWT, CORS, unggah/kuota, idempotensi, serta audit. Alur pembuatan akun admin dan verifikasi email dapat diuji dengan `node backend_php/tests/onboarding_integration.mjs`; pembacaan konfigurasi SMTP privat diuji dengan `node backend_php/tests/smtp_config_integration.mjs`. Kedua tes memakai server SMTP lokal sementara. Tes belum menggantikan audit keamanan independen.
 
 ---
 
@@ -57,7 +59,10 @@ Tes regresi memulai API lokal dengan direktori data sementara dan memvalidasi pe
 | Method | Endpoint | Keterangan |
 | :--- | :--- | :--- |
 | `GET` | `/api/health` | Healthcheck & spesifikasi standar keamanan |
-| `POST` | `/api/auth/register` | Pendaftaran akun baru |
+| `POST` | `/api/auth/register` | Ditolak (pendaftaran publik dinonaktifkan) |
+| `POST` | `/api/auth/onboarding/verify-email` | Kompatibilitas akun lama: verifikasi kode email |
+| `POST` | `/api/auth/onboarding/set-password` | Kompatibilitas akun lama: ganti kata sandi sementara |
+| `POST` | `/api/auth/activate` | Aktifkan akun dari tautan email dan buat kata sandi baru |
 | `POST` | `/api/auth/login` | Autentikasi kredensial & pemicu tantangan MFA |
 | `POST` | `/api/auth/mfa/setup` | Memulai enrollment TOTP setelah verifikasi password |
 | `POST` | `/api/auth/mfa/verify` | Validasi kode MFA TOTP & penerbitan JWT |
@@ -75,12 +80,16 @@ Tes regresi memulai API lokal dengan direktori data sementara dan memvalidasi pe
 | `GET` | `/api/files/{id}/chunk/{idx}/data` | Streaming binary ciphertext chunk |
 | `PATCH`| `/api/files/{id}/metadata` | Memperbarui nama/tag terenkripsi |
 | `DELETE`| `/api/files/{id}` | Pemusnahan berkas dan seluruh chunk |
-| `GET` | `/api/audit` | Riwayat log audit (anti-tamper) |
-| `GET` | `/api/audit/verify` | Verifikasi integritas rantai SHA-256 |
+| `GET` | `/api/audit` | [Admin] Riwayat log audit (anti-tamper) |
+| `GET` | `/api/audit/verify` | [Admin] Verifikasi integritas rantai SHA-256 |
 | `GET` | `/api/admin/users` | [Admin] Daftar seluruh pengguna |
+| `POST` | `/api/admin/users/{id}/resend-verification` | [Admin] Kirim ulang tautan aktivasi untuk akun yang menunggu aktivasi |
+| `POST` | `/api/admin/users` | [Admin] Buat akun pengguna baru |
 | `GET` | `/api/admin/stats` | [Admin] Telemetri sistem & integritas rantai |
 | `PATCH`| `/api/admin/users/{id}/quota` | [Admin] Alokasi kuota penyimpanan |
-| `POST` | `/api/admin/users/{id}/revoke`| [Admin] Pencabutan sesi pengguna |
+| `POST` | `/api/admin/users/{id}/revoke`| [Admin] Cabut semua sesi dan nonaktifkan akun; akun serta berkas tetap tersimpan |
+| `POST` | `/api/admin/users/{id}/reactivate`| [Admin] Aktifkan kembali akun yang sudah menyelesaikan verifikasi awal |
+| `DELETE` | `/api/admin/users/{id}` | [Admin] Hapus akun nonaktif secara permanen setelah konfirmasi username; seluruh data brankas miliknya ikut dihapus, jejak audit tetap disimpan |
 
 
 ## Runtime database

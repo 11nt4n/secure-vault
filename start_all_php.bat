@@ -29,6 +29,9 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+if not defined SECURE_VAULT_SMTP_HOST if not exist "var\secure-vault\smtp.json" (
+  echo Gmail SMTP belum diatur. Sebelum membuat akun pengguna, jalankan configure_gmail_smtp.bat.
+)
 echo.
 
 echo [2/3] Menjalankan Backend PHP di port 5000...

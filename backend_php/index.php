@@ -59,7 +59,7 @@ try {
     // Auth Routes
     // ----------------------------------------------------
     if ($path === '/api/auth/register' && $method === 'POST') {
-        AuthRoutes::register($body);
+        Response::error('Pendaftaran hanya dapat dilakukan oleh administrator.', 403);
     }
     if ($path === '/api/auth/login' && $method === 'POST') {
         AuthRoutes::login($body);
@@ -69,6 +69,15 @@ try {
     }
     if ($path === '/api/auth/mfa/verify' && $method === 'POST') {
         AuthRoutes::verifyMfa($body);
+    }
+    if ($path === '/api/auth/onboarding/verify-email' && $method === 'POST') {
+        AuthRoutes::verifyOnboardingEmail($body);
+    }
+    if ($path === '/api/auth/activate' && $method === 'POST') {
+        AuthRoutes::activateAccount($body);
+    }
+    if ($path === '/api/auth/onboarding/set-password' && $method === 'POST') {
+        AuthRoutes::completeOnboarding($body);
     }
     if ($path === '/api/auth/logout' && $method === 'POST') {
         AuthRoutes::logout();
@@ -151,14 +160,26 @@ try {
     if ($path === '/api/admin/users' && $method === 'GET') {
         AdminRoutes::listUsers();
     }
+    if ($path === '/api/admin/users' && $method === 'POST') {
+        AdminRoutes::createUser($body);
+    }
     if ($path === '/api/admin/stats' && $method === 'GET') {
         AdminRoutes::getStats();
     }
     if (preg_match('#^/api/admin/users/([a-zA-Z0-9\-]+)/quota$#', $path, $m) && $method === 'PATCH') {
         AdminRoutes::updateQuota($m[1], $body);
     }
+    if (preg_match('#^/api/admin/users/([a-zA-Z0-9\-]+)/resend-verification$#', $path, $m) && $method === 'POST') {
+        AdminRoutes::resendVerificationCode($m[1]);
+    }
     if (preg_match('#^/api/admin/users/([a-zA-Z0-9\-]+)/revoke$#', $path, $m) && $method === 'POST') {
         AdminRoutes::revokeUser($m[1]);
+    }
+    if (preg_match('#^/api/admin/users/([a-zA-Z0-9\-]+)/reactivate$#', $path, $m) && $method === 'POST') {
+        AdminRoutes::reactivateUser($m[1]);
+    }
+    if (preg_match('#^/api/admin/users/([a-zA-Z0-9\-]+)$#', $path, $m) && $method === 'DELETE') {
+        AdminRoutes::deleteUser($m[1], $body);
     }
 
     // Endpoint Not Found

@@ -7,6 +7,8 @@ require_once __DIR__ . '/../utils/Jwt.php';
 require_once __DIR__ . '/../utils/Response.php';
 require_once __DIR__ . '/../utils/Audit.php';
 require_once __DIR__ . '/../utils/Totp.php';
+require_once __DIR__ . '/../utils/SmtpMailer.php';
+require_once __DIR__ . '/../utils/Activation.php';
 require_once __DIR__ . '/../middleware/AuthMiddleware.php';
 
 class AuthRoutes
@@ -15,6 +17,7 @@ class AuthRoutes
     private const MFA_MAX_ATTEMPTS = 5;
     private const AUTH_WINDOW_SECONDS = 900;
     private const MFA_CHALLENGE_TTL_SECONDS = 1200;
+    private const ONBOARDING_TTL_SECONDS = 600;
 
     private static function requestIp(): string
     {
@@ -183,60 +186,6 @@ class AuthRoutes
         Response::json(['token' => $token, 'user' => self::publicUser($user)]);
     }
 
-    public static function register(array $body): void
-    {
-        $username = trim((string)($body['username'] ?? ''));
-        $password = (string)($body['password'] ?? '');
-        $email = trim((string)($body['email'] ?? ''));
-
-        if ($username === '' || $password === '' || $email === '') {
-            Response::error('Username, password, dan email wajib diisi.', 400);
-        }
-        if (strlen($password) < 12) {
-            Response::error('Kata sandi harus memiliki minimal 12 karakter.', 400);
-        }
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            Response::error('Format email tidak valid.', 400);
-        }
-        if (strlen($username) > 64 || strlen($email) > 254 || preg_match('/[\x00-\x1F\x7F]/', $username)) {
-            Response::error('Username atau email tidak valid.', 400);
-        }
-
-        $db = Database::getInstance();
-        if ($db->getUserByUsername($username) || $db->getUserByEmail($email)) {
-            Response::error('Username atau email sudah terdaftar.', 409);
-        }
-
-        // Self-service registration always creates a least-privileged user. Never accept role from client input.
-        $newUser = [
-            'id' => Database::generateUuid(),
-            'username' => $username,
-            'password_hash' => Database::hashPassword($password),
-            'email' => $email,
-            'role' => 'user',
-            'is_active' => true,
-            'storage_quota_bytes' => 5 * 1024 * 1024 * 1024,
-            'storage_used_bytes' => 0,
-            'mfa_secret_encrypted' => null,
-            'mfa_secret_pending_encrypted' => null,
-            'session_version' => 0,
-            'created_at' => gmdate('Y-m-d\\TH:i:s.000\\Z')
-        ];
-
-        $db->addUser($newUser);
-        Audit::logEvent($newUser['id'], 'USER_REGISTER', null, null, null, 'SUCCESS');
-
-        Response::json([
-            'message' => 'Registrasi berhasil. Siapkan autentikator TOTP saat login pertama.',
-            'user' => [
-                'id' => $newUser['id'],
-                'username' => $newUser['username'],
-                'email' => $newUser['email'],
-                'role' => $newUser['role'],
-            ]
-        ], 201);
-    }
-
     public static function login(array $body): void
     {
         $username = trim((string)($body['username'] ?? ''));
@@ -263,6 +212,9 @@ class AuthRoutes
             $user = $db->getUserById($user['id']) ?? $user;
         }
 
+        if (!empty($user['onboarding_pending'])) {
+            self::startOnboarding($db, $user);
+        }
         if (empty($user['is_active'])) {
             Response::error('Akun Anda dinonaktifkan oleh administrator.', 403);
         }
@@ -282,6 +234,168 @@ class AuthRoutes
                 'role' => $user['role'],
             ]
         ]);
+    }
+
+    private static function startOnboarding(Database $db, array $user): void
+    {
+        $now = time();
+        if (!empty($user['email_verified_at'])) {
+            $passwordToken = bin2hex(random_bytes(32));
+            $db->updateUser((string)$user['id'], [
+                'onboarding_password_token_hash' => hash('sha256', $passwordToken),
+                'onboarding_password_expires_at' => $now + self::ONBOARDING_TTL_SECONDS,
+            ]);
+            Response::json([
+                'onboardingRequired' => true,
+                'passwordToken' => $passwordToken,
+                'message' => 'Email sudah terverifikasi. Buat kata sandi baru.',
+            ]);
+        }
+        $challenge = bin2hex(random_bytes(32));
+        $hasValidCode = !empty($user['onboarding_code_hash'])
+            && (int)($user['onboarding_expires_at'] ?? 0) > $now
+            && (int)($user['onboarding_attempts'] ?? 0) < 5;
+        $updates = [
+            'onboarding_challenge_hash' => hash('sha256', $challenge),
+            'onboarding_password_token_hash' => null,
+            'onboarding_password_expires_at' => null,
+        ];
+        if (!$hasValidCode) {
+            if ($now - (int)($user['onboarding_sent_at'] ?? 0) < 60) {
+                Response::error('Kode baru dapat dikirim setelah 1 menit. Periksa email Anda.', 429);
+            }
+            $code = (string)random_int(10000000, 99999999);
+            try {
+                SmtpMailer::sendVerificationCode((string)$user['email'], $code, (string)$user['username']);
+            } catch (Throwable $e) {
+                error_log('[Secure Vault] Onboarding email delivery failed: ' . $e->getMessage());
+                Response::error('Email verifikasi belum dapat dikirim. Hubungi administrator untuk memeriksa konfigurasi SMTP.', 503);
+            }
+            $updates['onboarding_code_hash'] = hash_hmac('sha256', $code, JWT_SECRET);
+            $updates['onboarding_expires_at'] = $now + self::ONBOARDING_TTL_SECONDS;
+            $updates['onboarding_sent_at'] = $now;
+            $updates['onboarding_attempts'] = 0;
+        }
+        $db->updateUser((string)$user['id'], $updates);
+        if (!$hasValidCode) Audit::logEvent((string)$user['id'], 'AUTH_EMAIL_CODE_SENT', null, null, null, 'SUCCESS');
+        $email = (string)$user['email'];
+        $at = strrpos($email, '@');
+        Response::json([
+            'onboardingRequired' => true,
+            'challenge' => $challenge,
+            'emailHint' => substr($email, 0, 1) . '***' . substr($email, $at),
+            'message' => 'Kode verifikasi telah dikirim ke email terdaftar.',
+        ]);
+    }
+
+    public static function verifyOnboardingEmail(array $body): void
+    {
+        $username = trim((string)($body['username'] ?? ''));
+        $challenge = (string)($body['challenge'] ?? '');
+        $code = (string)($body['code'] ?? '');
+        if (!preg_match('/^[a-f0-9]{64}$/', $challenge) || !preg_match('/^[0-9]{8}$/', $code)) {
+            Response::error('Kode verifikasi tidak valid atau kedaluwarsa.', 400);
+        }
+        $db = Database::getInstance();
+        $user = $db->getUserByUsername($username);
+        if (!$user || empty($user['onboarding_pending']) || (int)($user['onboarding_expires_at'] ?? 0) < time()
+            || (int)($user['onboarding_attempts'] ?? 0) >= 5
+            || !hash_equals((string)($user['onboarding_challenge_hash'] ?? ''), hash('sha256', $challenge))) {
+            Response::error('Kode verifikasi tidak valid atau kedaluwarsa. Masuk kembali untuk meminta kode baru.', 400);
+        }
+        if (!hash_equals((string)($user['onboarding_code_hash'] ?? ''), hash_hmac('sha256', $code, JWT_SECRET))) {
+            $db->updateUser((string)$user['id'], ['onboarding_attempts' => (int)($user['onboarding_attempts'] ?? 0) + 1]);
+            Audit::logEvent((string)$user['id'], 'AUTH_EMAIL_VERIFY_FAILED', null, null, null, 'FAILED');
+            Response::error('Kode verifikasi salah atau kedaluwarsa.', 400);
+        }
+        $passwordToken = bin2hex(random_bytes(32));
+        $db->updateUser((string)$user['id'], [
+            'onboarding_challenge_hash' => null,
+            'onboarding_code_hash' => null,
+            'email_verified_at' => gmdate('Y-m-d\TH:i:s.000\Z'),
+            'onboarding_password_token_hash' => hash('sha256', $passwordToken),
+            'onboarding_password_expires_at' => time() + self::ONBOARDING_TTL_SECONDS,
+        ]);
+        Audit::logEvent((string)$user['id'], 'AUTH_EMAIL_VERIFIED', null, null, null, 'SUCCESS');
+        Response::json(['passwordToken' => $passwordToken, 'message' => 'Email terverifikasi. Buat kata sandi baru.']);
+    }
+
+    public static function activateAccount(array $body): void
+    {
+        $userId = (string)($body['userId'] ?? '');
+        $token = (string)($body['token'] ?? '');
+        $password = (string)($body['newPassword'] ?? '');
+        if (!preg_match('/^[a-f0-9-]{36}$/i', $userId) || !preg_match('/^[a-f0-9]{64}$/', $token)) {
+            Response::error('Tautan aktivasi tidak valid atau sudah kedaluwarsa.', 400);
+        }
+        if (strlen($password) < 12 || strlen($password) > 1024) {
+            Response::error('Kata sandi baru harus 12–1024 karakter.', 400);
+        }
+        $db = Database::getInstance();
+        $throttleKey = self::throttleKey('activation', $userId);
+        if ($db->isRateLimited($throttleKey, self::LOGIN_MAX_ATTEMPTS, self::AUTH_WINDOW_SECONDS)) {
+            Response::error('Terlalu banyak percobaan aktivasi. Coba kembali setelah 15 menit.', 429);
+        }
+        $user = $db->getUserById($userId);
+        if (!$user || empty($user['onboarding_pending']) || !empty($user['is_active'])
+            || (int)($user['activation_expires_at'] ?? 0) < time()
+            || !hash_equals((string)($user['activation_token_hash'] ?? ''), Activation::tokenHash($token))) {
+            $db->recordRateLimitFailure($throttleKey, self::AUTH_WINDOW_SECONDS);
+            Response::error('Tautan aktivasi tidak valid atau sudah kedaluwarsa. Minta admin mengirim ulang tautan.', 400);
+        }
+        $db->transaction(function (Database $tx) use ($user, $password): void {
+            $tx->updateUser((string)$user['id'], [
+                'password_hash' => Database::hashPassword($password),
+                'role' => 'user',
+                'is_active' => true,
+                'onboarding_pending' => false,
+                'email_verified_at' => gmdate('Y-m-d\TH:i:s.000\Z'),
+                'activation_token_hash' => null,
+                'activation_expires_at' => null,
+                'onboarding_code_hash' => null,
+                'onboarding_challenge_hash' => null,
+                'onboarding_password_token_hash' => null,
+                'session_version' => (int)($user['session_version'] ?? 0) + 1,
+            ]);
+            Audit::logEvent((string)$user['id'], 'AUTH_EMAIL_VERIFIED');
+            Audit::logEvent((string)$user['id'], 'AUTH_ONBOARDING_COMPLETE');
+        });
+        $db->clearRateLimit($throttleKey);
+        Response::json(['message' => 'Akun aktif. Masuk dengan kata sandi baru untuk melanjutkan ke OTP.']);
+    }
+
+    public static function completeOnboarding(array $body): void
+    {
+        $username = trim((string)($body['username'] ?? ''));
+        $token = (string)($body['passwordToken'] ?? '');
+        $password = (string)($body['newPassword'] ?? '');
+        if (!preg_match('/^[a-f0-9]{64}$/', $token)) Response::error('Sesi aktivasi tidak valid.', 400);
+        if (strlen($password) < 12 || strlen($password) > 1024) {
+            Response::error('Kata sandi baru harus 12–1024 karakter.', 400);
+        }
+        $db = Database::getInstance();
+        $user = $db->getUserByUsername($username);
+        if (!$user || empty($user['onboarding_pending']) || (int)($user['onboarding_password_expires_at'] ?? 0) < time()
+            || !hash_equals((string)($user['onboarding_password_token_hash'] ?? ''), hash('sha256', $token))) {
+            Response::error('Sesi aktivasi kedaluwarsa. Masuk kembali dengan kata sandi sementara.', 400);
+        }
+        if (Database::verifyPassword($password, (string)$user['password_hash'])) {
+            Response::error('Kata sandi baru harus berbeda dari kata sandi sementara.', 400);
+        }
+        $db->updateUser((string)$user['id'], [
+            'password_hash' => Database::hashPassword($password),
+            'is_active' => true,
+            'onboarding_pending' => false,
+            'onboarding_challenge_hash' => null,
+            'onboarding_code_hash' => null,
+            'onboarding_password_token_hash' => null,
+            'onboarding_expires_at' => null,
+            'onboarding_password_expires_at' => null,
+            'onboarding_attempts' => null,
+            'session_version' => (int)($user['session_version'] ?? 0) + 1,
+        ]);
+        Audit::logEvent((string)$user['id'], 'AUTH_ONBOARDING_COMPLETE', null, null, null, 'SUCCESS');
+        Response::json(['message' => 'Akun aktif. Masuk dengan kata sandi baru Anda.']);
     }
 
     public static function setupMfa(array $body): void

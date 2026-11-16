@@ -9,7 +9,9 @@ function isCredentialOrMfaEndpoint(endpoint) {
   const path = String(endpoint).split('?')[0].replace(/\/$/, '');
   return [
     '/auth/login',
-    '/auth/register',
+    '/auth/activate',
+    '/auth/onboarding/verify-email',
+    '/auth/onboarding/set-password',
     '/auth/mfa/setup',
     '/auth/mfa/verify'
   ].includes(path);

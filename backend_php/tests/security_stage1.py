@@ -116,19 +116,29 @@ def main() -> int:
                 else:
                     raise RuntimeError(f"PHP server did not become ready. Inspect {log_path}")
 
-                # Weak passwords are rejected.
+                # Public registration is disabled; only administrators create accounts.
                 status, body, _ = request(base, "/auth/register", {
                     "username": "stage1user", "password": "short", "email": "stage1@example.test"
                 })
-                assert status == 400, (status, body)
+                assert status == 403, (status, body)
 
-                # Client-supplied role=admin must not elevate privilege.
                 password = "Sufficiently-Long-Password-90"
                 status, body, _ = request(base, "/auth/register", {
                     "username": "stage1user", "password": password,
                     "email": "stage1@example.test", "role": "admin"
                 })
-                assert status == 201 and body["user"]["role"] == "user", (status, body)
+                assert status == 403, (status, body)
+                seed_php = (
+                    "require 'backend_php/config.php'; require 'backend_php/db/Database.php'; "
+                    "$db=Database::getInstance(); $db->addUser(["
+                    "'id'=>Database::generateUuid(),'username'=>'stage1user',"
+                    "'email'=>'stage1@example.test','password_hash'=>Database::hashPassword('Sufficiently-Long-Password-90'),"
+                    "'role'=>'user','is_active'=>true,'session_version'=>0,"
+                    "'storage_quota_bytes'=>5368709120,'storage_used_bytes'=>0]);"
+                )
+                seeded = subprocess.run([php, "-r", seed_php], cwd=PROJECT_ROOT, env=env,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10)
+                assert seeded.returncode == 0, seeded.stdout
 
                 status, login, _ = request(base, "/auth/login", {
                     "username": "stage1user", "password": password
@@ -237,7 +247,7 @@ def main() -> int:
                 assert "Access-Control-Allow-Origin" not in cors_headers
 
                 print("PASS: Stage 1 API security regressions")
-                print("  - user registration ignores role=admin and rejects weak passwords")
+                print("  - public registration is rejected")
                 print("  - RFC 6238 vector, real TOTP enrollment, wrong-code rejection, and replay prevention")
                 print("  - 20-minute MFA challenge and 8-hour sliding JWT renewal")
                 print("  - MFA secret encrypted at rest and password stored with a slow hash")

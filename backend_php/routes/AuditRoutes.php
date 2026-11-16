@@ -12,12 +12,9 @@ class AuditRoutes
     public static function list(): void
     {
         $user = AuthMiddleware::authenticate();
+        AuthMiddleware::requireAdmin($user);
         $db = Database::getInstance();
         $logs = $db->getAuditLogs();
-
-        if ($user['role'] !== 'admin') {
-            $logs = array_values(array_filter($logs, fn($l) => $l['user_id'] === $user['id']));
-        }
 
         // Sort descending by sequence number
         usort($logs, fn($a, $b) => (int)$b['sequence_number'] <=> (int)$a['sequence_number']);
@@ -27,7 +24,8 @@ class AuditRoutes
 
     public static function verify(): void
     {
-        AuthMiddleware::authenticate();
+        $user = AuthMiddleware::authenticate();
+        AuthMiddleware::requireAdmin($user);
         $result = Audit::verifyChain();
         Response::json($result);
     }

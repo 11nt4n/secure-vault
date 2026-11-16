@@ -145,7 +145,18 @@ def main() -> int:
                 status, registration, _ = request(base, "/auth/register", {
                     "username": username, "password": password, "email": email,
                 })
-                assert status == 201, (status, registration)
+                assert status == 403, (status, registration)
+                seed_php = (
+                    "require 'backend_php/config.php'; require 'backend_php/db/Database.php'; "
+                    "$db=Database::getInstance(); $id=Database::generateUuid(); $db->addUser(["
+                    "'id'=>$id,'username'=>'stage2user',"
+                    "'email'=>'stage2@example.test','password_hash'=>Database::hashPassword('Sufficiently-Long-Password-90'),"
+                    "'role'=>'user','is_active'=>true,'session_version'=>0,"
+                    "'storage_quota_bytes'=>5368709120,'storage_used_bytes'=>0]); echo $id;"
+                )
+                seeded = subprocess.run([php, "-r", seed_php], cwd=PROJECT_ROOT, env=env,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10)
+                assert seeded.returncode == 0, seeded.stdout
                 status, login, _ = request(base, "/auth/login", {"username": username, "password": password})
                 assert status == 200 and login["mfaSetupRequired"] is True, (status, login)
                 challenge = login["mfaToken"]
@@ -217,7 +228,7 @@ def main() -> int:
                 assert int(user_obj.get("storageUsedBytes", user_obj.get("storage_used_bytes", -1))) == 1, user_obj
 
                 # Set quota to the already-reserved byte, then verify a second reservation is denied.
-                user_id = registration["user"]["id"]
+                user_id = seeded.stdout.strip()
                 set_quota_php = (
                     "require 'backend_php/config.php'; require 'backend_php/db/Database.php'; "
                     "$db=Database::getInstance(); $db->updateUser($argv[1], ['storage_quota_bytes'=>(int)$argv[2]]);"

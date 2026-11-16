@@ -1,4 +1,4 @@
-import { request, getAuthToken, setAuthToken, clearAuthToken } from './api.js?v=9';
+import { request, getAuthToken, setAuthToken, clearAuthToken } from './api.js?v=11';
 import { createQrSvg } from './qr.js?v=9';
 import { encryptChunkOffThread, decryptChunkOffThread, terminateCryptoWorker } from './crypto-worker-client.js?v=9';
 import {
@@ -28,11 +28,12 @@ const MAGIC = {
 const state = {
   theme: localStorage.getItem('sv_theme_preference') || 'light',
   user: null, activeTab: 'files', unlocked: false, createMenuOpen: false, currentFolderId: null, pendingVaultAction: null,
-  login: { register: false, username: '', password: '', email: '', mfaRequired: false, mfaSetupRequired: false, mfaToken: '', totpCode: '', mfaSecret: '', mfaOtpUri: '', secretCopied: false, loading: false, error: '', notice: '' },
+  login: { username: '', password: '', onboardingStage: '', onboardingChallenge: '', onboardingEmailHint: '', onboardingPasswordToken: '', mfaRequired: false, mfaSetupRequired: false, mfaToken: '', totpCode: '', mfaSecret: '', mfaOtpUri: '', secretCopied: false, loading: false, error: '', notice: '' },
+  activation: null,
   files: [], decryptedFiles: [], folders: [], decryptedFolders: [], filesLoading: false, filesError: '', search: '', selectedTag: null, sortBy: 'date', sortAsc: false, dashboardView: 'home', fileLayout: 'grid',
   downloadingId: null, downloadProgress: 0, preview: null,
-  audit: { logs: [], loading: false, verifying: false, action: 'ALL', status: 'ALL', integrity: null, error: '' },
-  admin: { users: [], stats: null, loading: false, error: '', success: '' },
+  audit: { logs: [], loading: false, action: 'ALL', status: 'ALL', error: '' },
+  admin: { users: [], stats: null, loading: false, creating: false, error: '', search: '', status: 'all' },
   modal: null, modalLoading: false, modalError: '', modalStage: '',
   vaultProfile: null, selectedFile: null, detailEditing: false, detailName: '', detailTags: '', detailSaving: false,
   upload: { file: null, tags: 'Rahasia, BSSN, Sertifikasi', uploading: false, progress: 0, currentChunk: 0, totalChunks: 0, status: '', error: '' },
@@ -41,6 +42,18 @@ const state = {
   passphrase: { newValue: '', confirm: '', loading: false, error: '', stage: '' },
   toastTimer: null, idleTimer: null
 };
+
+const activationMatch = /^#activate=([a-f0-9-]{36})\.([a-f0-9]{64})\.([^&]+)$/i.exec(location.hash);
+if (activationMatch) {
+  try {
+    const username = decodeURIComponent(activationMatch[3]);
+    if (/^[A-Za-z0-9_.-]{3,64}$/.test(username)) {
+      state.activation = { userId: activationMatch[1], token: activationMatch[2], username, loading: false, error: '' };
+      clearAuthToken();
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  } catch { /* Invalid link remains on the login page. */ }
+}
 
 function esc(value = '') {
   return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -136,7 +149,7 @@ function handleAppPopState(event) {
   if (state.user) {
     if (nav?.secureVaultApp && nav.view === 'app') {
       const changed = state.activeTab !== nav.tab;
-      state.activeTab = ['files', 'audit', 'admin'].includes(nav.tab) && (nav.tab !== 'admin' || state.user.role === 'admin') ? nav.tab : 'files';
+      state.activeTab = ['files', 'audit', 'admin'].includes(nav.tab) && (nav.tab === 'files' || state.user.role === 'admin') ? nav.tab : 'files';
       if (['home', 'files'].includes(nav.dashboardView)) state.dashboardView = nav.dashboardView;
       state.currentFolderId = typeof nav.currentFolderId === 'string' && state.folders.some(folder => folder.id === nav.currentFolderId) ? nav.currentFolderId : null;
       const allowedModals = ['unlock', 'upload', 'new-folder', 'folder-select', 'folder-upload', 'change-pass', 'details', 'preview'];
@@ -208,8 +221,8 @@ function sidebarTemplate() {
       <button type="button" class="drive-nav-item ${state.activeTab === 'files' && state.dashboardView === 'home' ? 'active' : ''}" data-action="dashboard-view" data-view="home">${icon('home', 19)}<span>Beranda</span></button>
       <button type="button" class="drive-nav-item ${state.activeTab === 'files' && state.dashboardView === 'files' ? 'active' : ''}" data-action="dashboard-view" data-view="files">${icon('database', 19)}<span>Brankas Saya</span></button>
       <div class="drive-nav-divider"></div>
-      <button type="button" class="drive-nav-item ${state.activeTab === 'audit' ? 'active' : ''}" data-action="tab" data-tab="audit">${icon('shield', 19)}<span>Jejak Audit</span></button>
-      ${state.user.role === 'admin' ? `<button type="button" class="drive-nav-item ${state.activeTab === 'admin' ? 'active' : ''}" data-action="tab" data-tab="admin">${icon('users', 19)}<span>Konsol Admin</span></button>` : ''}
+      ${state.user.role === 'admin' ? `<button type="button" class="drive-nav-item ${state.activeTab === 'audit' ? 'active' : ''}" data-action="tab" data-tab="audit">${icon('shield', 19)}<span>Jejak Audit</span></button>
+      <button type="button" class="drive-nav-item ${state.activeTab === 'admin' ? 'active' : ''}" data-action="tab" data-tab="admin">${icon('users', 19)}<span>Konsol Admin</span></button>` : ''}
     </nav>
     <div class="drive-sidebar-bottom"><div class="drive-storage-label">${icon('database', 18)}<span>Penyimpanan</span></div><progress class="vault-progress storage-progress" max="100" value="${percent}" aria-label="Pemakaian kuota ${percent}%">${percent}%</progress><p>${bytes(total)} dari ${bytes(quota)} digunakan</p>${state.unlocked ? `<span class="drive-vault-state unlocked">${icon('unlock', 15)} Brankas terbuka</span>` : `<button type="button" class="drive-vault-state drive-vault-unlock" data-action="open-unlock" title="Buka kunci brankas">${icon('lock', 15)} Brankas terkunci</button>`}</div>
   </aside>`;
@@ -249,22 +262,39 @@ function otpEnrollmentTemplate(login) {
 }
 function loginTemplate() {
   const l = state.login;
-  const title = l.mfaRequired ? (l.mfaSetupRequired ? 'Aktifkan Authenticator' : 'Verifikasi Dua Faktor (MFA)') : l.register ? 'Daftar Akun Secure Vault' : 'Selamat Datang di Secure Vault';
-  const subtitle = l.mfaRequired ? (l.mfaSetupRequired ? 'Pindai QR code pada aplikasi authenticator untuk mengamankan akun Anda.' : 'Masukkan kode 6 digit dari aplikasi authenticator Anda untuk melanjutkan.') : (l.register ? 'Buat akun baru untuk mulai mengamankan berkas dengan enkripsi zero-knowledge.' : 'Silakan masuk ke akun Anda untuk mengakses brankas berkas terenkripsi.');
+  const title = l.onboardingStage === 'email' ? 'Verifikasi Email' : l.onboardingStage === 'password' ? 'Buat Kata Sandi Baru' : l.mfaRequired ? (l.mfaSetupRequired ? 'Aktifkan Authenticator' : 'Verifikasi Dua Faktor (MFA)') : 'Selamat Datang di Secure Vault';
+  const subtitle = l.onboardingStage === 'email' ? `Masukkan kode 8 digit yang dikirim ke ${esc(l.onboardingEmailHint)}.` : l.onboardingStage === 'password' ? 'Email berhasil diverifikasi. Ganti kata sandi sementara untuk mengaktifkan akun.' : l.mfaRequired ? (l.mfaSetupRequired ? 'Pindai QR code pada aplikasi authenticator untuk mengamankan akun Anda.' : 'Masukkan kode 6 digit dari aplikasi authenticator Anda untuk melanjutkan.') : 'Masuk dengan akun yang diberikan administrator.';
   return `<section class="login-wrap"><div class="glass-card login-card ${l.mfaSetupRequired ? 'login-card-otp' : ''}"><div class="login-heading"><img src="./logo.png" alt="Secure Vault Logo"><h2>${title}</h2><p>${subtitle}</p></div>
     ${l.notice ? `<div class="inline-notice">${icon('check',18)}<span>${esc(l.notice)}</span></div>` : ''}${errorBox(l.error)}
-    ${l.mfaRequired ? `<form data-form="mfa" class="form-stack" novalidate>
+    ${l.onboardingStage === 'email' ? `<form data-form="onboarding-email" class="form-stack" novalidate>
+      <div class="input-group"><label class="input-label">Kode verifikasi email (8 digit)</label><input class="input-control mono otp-input" name="emailCode" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" required autofocus></div>
+      <button class="btn btn-primary btn-block" type="submit" ${l.loading ? 'disabled' : ''}>${l.loading ? 'Memverifikasi...' : 'Verifikasi Email'}</button>
+      <button type="button" class="btn btn-secondary btn-sm btn-block" data-action="onboarding-back">Kembali ke Login</button>
+    </form>` : l.onboardingStage === 'password' ? `<form data-form="onboarding-password" class="form-stack" novalidate>
+      <div class="input-group"><label class="input-label">Kata sandi baru</label><input class="input-control" name="newPassword" type="password" autocomplete="new-password" minlength="12" required></div>
+      <div class="input-group"><label class="input-label">Ulangi kata sandi baru</label><input class="input-control" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required></div>
+      <button class="btn btn-primary btn-block" type="submit" ${l.loading ? 'disabled' : ''}>${l.loading ? 'Menyimpan...' : 'Aktifkan Akun'}</button>
+      <button type="button" class="btn btn-secondary btn-sm btn-block" data-action="onboarding-back">Kembali ke Login</button>
+    </form>` : l.mfaRequired ? `<form data-form="mfa" class="form-stack" novalidate>
       ${l.mfaSetupRequired ? otpEnrollmentTemplate(l) : ''}
       <div class="input-group"><label class="input-label">${l.mfaSetupRequired ? '3. Masukkan kode 6 digit untuk menyelesaikan aktivasi TOTP' : 'Kode autentikator (6 digit)'}</label><input class="input-control mono otp-input" name="totpCode" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required value="${esc(l.totpCode)}" autofocus></div>
       <button class="btn btn-primary btn-block" type="submit" ${l.loading || l.totpCode.length !== 6 || (l.mfaSetupRequired && !l.mfaSecret) ? 'disabled' : ''}>${l.loading ? 'Memverifikasi...' : l.mfaSetupRequired ? 'Aktifkan TOTP & Masuk' : 'Verifikasi & Masuk'} ${icon('arrow',16)}</button>
       <button type="button" class="btn btn-secondary btn-sm btn-block" data-action="mfa-back" ${l.loading ? 'disabled' : ''}>Kembali ke Login</button>
     </form>` : `<form data-form="login" class="form-stack" novalidate>
       <div class="input-group"><label class="input-label">Username</label><input class="input-control" name="username" placeholder="Masukkan username" required autocomplete="username" value="${esc(l.username)}"></div>
-      ${l.register ? `<div class="input-group"><label class="input-label">Email</label><input class="input-control" type="email" name="email" placeholder="nama@contoh.id" required autocomplete="email" value="${esc(l.email)}"></div>` : ''}
-      <div class="input-group"><label class="input-label">Kata Sandi</label><input class="input-control" type="password" name="password" placeholder="Masukkan kata sandi" required ${l.register ? 'minlength="12" autocomplete="new-password"' : 'autocomplete="current-password"'}>${l.register ? '<p class="helper-text">Minimal 12 karakter. Gunakan kata sandi unik yang tidak dipakai di layanan lain.</p>' : ''}</div>
-      <button class="btn btn-primary btn-block" type="submit" ${l.loading ? 'disabled' : ''}>${l.loading ? 'Memproses...' : l.register ? 'Daftar Akun Baru' : 'Masuk'} ${icon('arrow',16)}</button>
-      <div class="login-switch"><button type="button" data-action="toggle-register">${l.register ? 'Sudah memiliki akun? Masuk di sini' : 'Belum memiliki akun? Daftarkan akun baru'}</button></div>
+      <div class="input-group"><label class="input-label">Kata Sandi</label><input class="input-control" type="password" name="password" placeholder="Masukkan kata sandi" required autocomplete="current-password"></div>
+      <button class="btn btn-primary btn-block" type="submit" ${l.loading ? 'disabled' : ''}>${l.loading ? 'Memproses...' : 'Masuk'} ${icon('arrow',16)}</button>
     </form>`}</div></section>`;
+}
+function activationTemplate() {
+  const a = state.activation;
+  return `<section class="login-wrap"><div class="glass-card login-card"><div class="login-heading"><img src="./logo.png" alt="Secure Vault Logo"><h2>Aktivasi Akun</h2><p>Verifikasi email dan buat kata sandi untuk ${esc(a.username)}. Setelah itu, masuk dan siapkan OTP authenticator.</p></div>
+    ${errorBox(a.error)}
+    <form data-form="activate-account" class="form-stack" novalidate>
+      <div class="input-group"><label class="input-label">Kata sandi baru</label><input class="input-control" name="newPassword" type="password" autocomplete="new-password" minlength="12" required autofocus></div>
+      <div class="input-group"><label class="input-label">Ulangi kata sandi baru</label><input class="input-control" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required></div>
+      <button class="btn btn-primary btn-block" type="submit" ${a.loading ? 'disabled' : ''}>${a.loading ? 'Mengaktifkan...' : 'Buat Kata Sandi & Aktifkan Akun'}</button>
+    </form><button type="button" class="btn btn-secondary btn-sm btn-block" data-action="activation-back">Kembali ke Login</button></div></section>`;
 }
 function alertTemplate(message) { return message ? `<div class="dashboard-alert">${icon('alert',18)}<span>${esc(message)}</span></div>` : ''; }
 function fileIcon(name) {
@@ -352,24 +382,140 @@ function dashboardTemplate() {
     </tbody></table></div></div>
   </div>`;
 }
+const AUDIT_ACTION_LABELS = {
+  USER_REGISTER: 'Akun baru didaftarkan',
+  AUTH_LOGIN: 'Masuk ke akun',
+  AUTH_LOGIN_FAILED: 'Gagal masuk ke akun',
+  AUTH_CREDENTIALS_VERIFIED: 'Nama pengguna dan kata sandi benar',
+  AUTH_MFA_ENROLLED: 'Authenticator berhasil diaktifkan',
+  AUTH_MFA_SUCCESS: 'Kode autentikator berhasil diverifikasi',
+  AUTH_MFA_FAILED: 'Kode autentikator gagal diverifikasi',
+  AUTH_LOGOUT: 'Keluar dari akun',
+  VAULT_SETUP: 'Brankas dibuat',
+  VAULT_REWRAP_MK: 'Kata sandi brankas diubah',
+  FOLDER_CREATE: 'Folder dibuat',
+  FOLDER_DELETE: 'Folder dihapus',
+  FILE_INIT: 'Unggah berkas dimulai',
+  FILE_CHUNK_UPLOAD: 'Bagian berkas diunggah',
+  FILE_UPLOAD_COMPLETE: 'Unggah berkas selesai',
+  FILE_DOWNLOAD: 'Berkas diunduh',
+  FILE_DELETE_PENDING: 'Penghapusan berkas dimulai',
+  FILE_DELETE: 'Berkas dihapus',
+  FILE_METADATA_UPDATE: 'Nama atau label berkas diubah',
+  FILE_UPLOAD_INTEGRITY_FAILURE: 'Pemeriksaan berkas gagal saat diunggah',
+  FILE_DOWNLOAD_INTEGRITY_FAILURE: 'Pemeriksaan berkas gagal saat diunduh',
+  ADMIN_UPDATE_QUOTA: 'Batas penyimpanan pengguna diubah',
+  ADMIN_REVOKE_USER_SESSION: 'Sesi pengguna dihentikan administrator',
+  ADMIN_ACCOUNT_DEACTIVATED: 'Akun pengguna dinonaktifkan administrator',
+  ADMIN_ACCOUNT_REACTIVATED: 'Akun pengguna diaktifkan kembali administrator',
+  ADMIN_DELETE_USER: 'Akun pengguna dihapus administrator',
+  ADMIN_ROLE_PROMOTION: 'Pengguna dijadikan administrator',
+  ADMIN_CREATE_USER: 'Administrator membuat akun pengguna',
+  AUTH_ACTIVATION_LINK_SENT: 'Tautan aktivasi email dikirim',
+  ADMIN_RESEND_ACTIVATION_LINK: 'Administrator mengirim ulang tautan aktivasi',
+  AUTH_EMAIL_CODE_SENT: 'Kode verifikasi email dikirim',
+  AUTH_EMAIL_VERIFY_FAILED: 'Kode verifikasi email salah',
+  AUTH_EMAIL_VERIFIED: 'Email berhasil diverifikasi',
+  AUTH_ONBOARDING_COMPLETE: 'Akun pengguna diaktifkan'
+};
+function auditActionLabel(action) {
+  return AUDIT_ACTION_LABELS[action] || 'Aktivitas sistem lainnya';
+}
+function auditDetailsLabel(details) {
+  if (!details) return '';
+  const labels = {
+    size_bytes: 'Ukuran berkas',
+    file_size_bytes: 'Ukuran berkas',
+    ciphertext_bytes: 'Data terenkripsi',
+    quota_bytes: 'Batas penyimpanan',
+    total_chunks: 'Jumlah bagian',
+    chunk_index: 'Bagian ke',
+    fields: 'Yang diubah',
+    upload_status: 'Kondisi unggahan'
+  };
+  return details.split(';').map(part => {
+    const [key, value] = part.split('=');
+    if (!labels[key] || !value) return '';
+    if (key.endsWith('_bytes')) return `${labels[key]}: ${bytes(Number(value))}`;
+    if (key === 'chunk_index') return `${labels[key]}: ${Number(value) + 1}`;
+    if (key === 'fields') return `${labels[key]}: ${value.split(',').map(field => ({name: 'nama', tags: 'label'}[field] || 'informasi berkas')).join(', ')}`;
+    if (key === 'upload_status') return `${labels[key]}: ${value === 'completed' ? 'selesai' : 'belum selesai'}`;
+    return `${labels[key]}: ${value}`;
+  }).filter(Boolean).join(' · ');
+}
 function auditTemplate() {
   const a = state.audit;
   const filtered = a.logs.filter(log => (a.action === 'ALL' || log.action_type === a.action) && (a.status === 'ALL' || log.status === a.status));
-  const actions = ['AUTH_LOGIN','AUTH_MFA_SUCCESS','VAULT_SETUP','FOLDER_CREATE','FOLDER_DELETE','FILE_INIT','FILE_CHUNK_UPLOAD','FILE_UPLOAD_COMPLETE','FILE_DOWNLOAD','FILE_DELETE_PENDING','FILE_DELETE','FILE_METADATA_UPDATE','FILE_UPLOAD_INTEGRITY_FAILURE','FILE_DOWNLOAD_INTEGRITY_FAILURE','VAULT_REWRAP_MK'];
-  return `<div class="container page-container"><div class="section-heading"><div><h2>Jejak Audit Berantai</h2><p>SHA-256 hash-chain • transaksi terpadu untuk operasi file yang didukung • checkpoint eksternal bertanda tangan</p></div><div>${btn('refresh-audit', `${icon('refresh',14)} Refresh`, 'btn-secondary btn-sm')}<button class="btn btn-primary btn-sm" data-action="verify-audit" ${a.verifying || !a.logs.length ? 'disabled' : ''}>${icon('shield',15)} ${a.verifying ? 'Memvalidasi Rantai...' : 'Uji Integritas Rantai (Hash-Chain)'}</button></div></div>
-    ${a.integrity ? `<div class="integrity-banner ${a.integrity.verified?'valid':'invalid'}">${icon(a.integrity.verified?'check':'alert',24)}<div><strong>${a.integrity.verified?'Rantai Hash Konsisten':'Peringatan: Rantai Hash Tidak Konsisten'}</strong><p>${esc(a.integrity.message)}</p></div></div>` : ''}
+  const actions = [...new Set(a.logs.map(log => log.action_type))].sort((left, right) => auditActionLabel(left).localeCompare(auditActionLabel(right), 'id'));
+  const successful = a.logs.filter(log => log.status === 'SUCCESS').length;
+  const failed = a.logs.filter(log => log.status === 'FAILED').length;
+  return `<div class="container page-container drive-dashboard admin-console audit-console"><div class="drive-page-heading admin-page-head"><div><h1>Jejak Audit</h1><p>Pantau seluruh aktivitas sistem yang tercatat.</p></div><div class="drive-heading-actions">${btn('refresh-audit', `${icon('refresh',16)} Perbarui data`, 'btn-secondary btn-sm')}</div></div>
     ${errorBox(a.error)}
-    <div class="audit-filters"><div>${icon('filter',16)}<label>Filter Aksi:</label><select id="audit-action" class="input-control"><option value="ALL">Semua Aksi</option>${actions.map(x=>`<option ${a.action===x?'selected':''}>${x}</option>`).join('')}</select></div><div><label>Status:</label><select id="audit-status" class="input-control"><option value="ALL">Semua Status</option><option value="SUCCESS" ${a.status==='SUCCESS'?'selected':''}>SUCCESS</option><option value="FAILED" ${a.status==='FAILED'?'selected':''}>FAILED</option></select></div></div>
-    <div class="glass-card table-card"><div class="table-scroll"><table class="data-table audit-table"><thead><tr><th>Seq #</th><th>Waktu (NTP)</th><th>Tipe Aksi</th><th>Pengguna / IP</th><th>Status</th><th>Rantai Kriptografi (Previous → Current Hash)</th></tr></thead><tbody>${a.loading ? '<tr><td colspan="6" class="empty-state">Memuat catatan audit berantai...</td></tr>' : !filtered.length ? '<tr><td colspan="6" class="empty-state">Belum ada log audit yang sesuai dengan filter.</td></tr>' : filtered.map(log=>`<tr><td><span class="badge badge-cyan mono">#${esc(log.sequence_number)}</span></td><td>${esc(dateText(log.timestamp))}</td><td><b>${esc(log.action_type)}</b>${log.details?`<small class="table-subtext">${esc(log.details)}</small>`:''}</td><td>${esc(log.user_id || '-')}<small class="table-subtext">${esc(log.ip_address || '-')}</small></td><td><span class="badge ${log.status==='SUCCESS'?'badge-emerald':'badge-rose'}">${esc(log.status)}</span></td><td><small class="mono hash-line">Prev: ${esc((log.previous_hash||'').substring(0,16))}...</small><small class="mono hash-line current-hash">Curr: ${esc((log.current_hash||'').substring(0,16))}...</small></td></tr>`).join('')}</tbody></table></div></div>
+    <div class="drive-section-heading admin-section-heading"><h2>Ringkasan audit</h2><span>Seluruh catatan aktivitas sistem</span></div>
+    <section class="admin-overview" aria-label="Ringkasan audit">
+      <div class="admin-metric"><div class="admin-metric-copy"><strong>${a.logs.length}</strong><span class="admin-metric-label">Total aktivitas</span><small>Catatan dalam rantai audit</small></div><span class="admin-metric-icon" aria-hidden="true">${icon('database',22)}</span></div>
+      <div class="admin-metric"><div class="admin-metric-copy"><strong>${successful}</strong><span class="admin-metric-label">Berhasil</span><small>Aktivitas selesai</small></div><span class="admin-metric-icon is-green" aria-hidden="true">${icon('check',22)}</span></div>
+      <div class="admin-metric"><div class="admin-metric-copy"><strong>${failed}</strong><span class="admin-metric-label">Gagal</span><small>Aktivitas tidak selesai</small></div><span class="admin-metric-icon is-amber" aria-hidden="true">${icon('alert',22)}</span></div>
+    </section>
+    <section class="admin-table-card audit-table-card" aria-labelledby="audit-log-title"><div class="drive-section-heading admin-table-heading"><h2 id="audit-log-title">Daftar aktivitas</h2><span>${filtered.length} dari ${a.logs.length} catatan</span></div><div class="admin-table-tools audit-table-tools"><label class="admin-filter-wrap" for="audit-action"><span>Aktivitas</span><select id="audit-action"><option value="ALL">Semua aktivitas</option>${actions.map(x=>`<option value="${esc(x)}" ${a.action===x?'selected':''}>${esc(auditActionLabel(x))}</option>`).join('')}</select></label><label class="admin-filter-wrap" for="audit-status"><span>Status</span><select id="audit-status"><option value="ALL">Semua status</option><option value="SUCCESS" ${a.status==='SUCCESS'?'selected':''}>Berhasil</option><option value="FAILED" ${a.status==='FAILED'?'selected':''}>Gagal</option></select></label></div><div class="table-scroll"><table class="data-table admin-table audit-table"><thead><tr><th scope="col">No.</th><th scope="col">Waktu</th><th scope="col">Aktivitas</th><th scope="col">Pengguna / IP</th><th scope="col">Status</th><th scope="col">Rantai hash</th></tr></thead><tbody>${a.loading ? '<tr><td colspan="6" class="empty-state">Memuat catatan audit...</td></tr>' : !filtered.length ? '<tr><td colspan="6" class="empty-state">Belum ada aktivitas yang sesuai dengan filter.</td></tr>' : filtered.map(log=>`<tr><td><span class="audit-sequence">#${esc(log.sequence_number)}</span></td><td>${esc(dateText(log.timestamp))}</td><td><strong class="audit-action-name">${esc(auditActionLabel(log.action_type))}</strong>${auditDetailsLabel(log.details) ? `<small class="table-subtext">${esc(auditDetailsLabel(log.details))}</small>` : ''}</td><td><span class="audit-user-id">${esc(log.user_id || '-')}</span><small class="table-subtext">${esc(log.ip_address || '-')}</small></td><td><span class="audit-status ${log.status==='SUCCESS'?'is-success':'is-failed'}">${log.status==='SUCCESS'?'Berhasil':log.status==='FAILED'?'Gagal':esc(log.status)}</span></td><td><small class="mono hash-line">Sebelumnya: ${esc((log.previous_hash||'').substring(0,16))}...</small><small class="mono hash-line current-hash">Saat ini: ${esc((log.current_hash||'').substring(0,16))}...</small></td></tr>`).join('')}</tbody></table></div></section>
   </div>`;
+}
+function adminUserRow(u) {
+  const protectedAdmin = u.role === 'admin';
+  const quotaGb = (Number(u.storage_quota_bytes) / (1024 ** 3)).toFixed(1);
+  const usedMb = (Number(u.storage_used_bytes) / (1024 ** 2)).toFixed(1);
+  const accountStatus = u.onboarding_pending ? 'MENUNGGU AKTIVASI' : u.is_active ? 'AKTIF' : 'DINONAKTIFKAN';
+  const emailStatus = u.email_verified_at ? `Email terverifikasi: ${esc(dateText(u.email_verified_at))}` : u.onboarding_pending ? 'Email belum diverifikasi' : 'Verifikasi email tidak tercatat';
+  const action = protectedAdmin ? '' : u.is_active
+    ? btn('admin-revoke', `${icon('lock', 13)} Cabut Sesi & Nonaktifkan`, 'btn-danger btn-sm', `data-id="${esc(u.id)}"`)
+    : (u.onboarding_pending ? '' : btn('admin-reactivate', `${icon('check', 13)} Aktifkan Akun`, 'btn-secondary btn-sm', `data-id="${esc(u.id)}"`))
+      + btn('admin-delete-user', `${icon('trash', 13)} Hapus Akun`, 'btn-danger btn-sm', `data-id="${esc(u.id)}" data-username="${esc(u.username)}"`);
+  const resend = !protectedAdmin && u.onboarding_pending && !u.email_verified_at ? btn('admin-resend-code', `${icon('refresh', 13)} Kirim Ulang Aktivasi`, 'btn-secondary btn-sm', `data-id="${esc(u.id)}"`) : '';
+  return `<tr class="${protectedAdmin ? 'admin-protected-row' : ''}"><td><div class="admin-person"><span class="admin-person-meta"><strong>${esc(u.username)}</strong><small title="${esc(u.email)}">${esc(u.email)}</small></span></div></td><td><span class="admin-role ${protectedAdmin ? 'is-admin' : ''}">${protectedAdmin ? 'Administrator' : 'Pengguna'}</span></td><td><strong class="admin-cell-value">${quotaGb} GB</strong><small class="admin-cell-note">${usedMb} MB digunakan</small></td><td><span class="admin-account-status ${u.onboarding_pending ? 'is-pending' : u.is_active ? 'is-active' : 'is-inactive'}"><span aria-hidden="true"></span>${accountStatus}</span><small class="admin-cell-note">${emailStatus}</small></td><td class="admin-actions-cell">${protectedAdmin ? '<span class="admin-protected-label">Akun terlindungi</span>' : `<div class="admin-row-actions">${btn('admin-quota', `${icon('database', 13)} Kuota`, 'btn-secondary btn-sm', `data-id="${esc(u.id)}" data-quota="${quotaGb}"`)}${resend}${action}</div>`}</td></tr>`;
+}
+function adminVisibleUsers() {
+  const a = state.admin;
+  const search = a.search.trim().toLocaleLowerCase('id-ID');
+  return a.users.filter(u => {
+    const status = u.onboarding_pending ? 'pending' : u.is_active ? 'active' : 'inactive';
+    return (a.status === 'all' || a.status === status) && (!search || `${u.username} ${u.email}`.toLocaleLowerCase('id-ID').includes(search));
+  });
+}
+function refreshAdminTable() {
+  const visible = adminVisibleUsers();
+  const body = $('.admin-table tbody');
+  if (body) body.innerHTML = visible.length ? visible.map(adminUserRow).join('') : `<tr><td colspan="5" class="empty-state">${state.admin.users.length ? 'Tidak ada akun yang sesuai dengan pencarian atau filter.' : 'Belum ada akun pengguna.'}</td></tr>`;
+  const count = $('.admin-result-count');
+  if (count) count.textContent = `${visible.length} dari ${state.admin.users.length} akun`;
 }
 function adminTemplate() {
   const a = state.admin; const s = a.stats;
-  return `<div class="container page-container"><div class="section-heading"><div><h2>Konsol Pengawasan Administrator</h2><p>Tata Kelola Pengguna, Kuota Penyimpanan & Kebijakan Akses</p></div>${btn('refresh-admin', `${icon('refresh',14)} Refresh Data`, 'btn-secondary btn-sm')}</div>
-    <div class="callout-info admin-policy">${icon('lock',20)}<div><strong>Prinsip Least Privilege & Separation of Duties:</strong> Administrator memiliki hak tata kelola akun dan pemantauan sistem, tetapi <em>dilarang dan tidak memiliki kemampuan teknis</em> untuk membaca, mengunduh, atau mendekripsi isi berkas pengguna mana pun.</div></div>
-    ${errorBox(a.error)}${a.success?`<div class="notice-success">${icon('check',18)} ${esc(a.success)}</div>`:''}
-    ${s ? `<div class="summary-grid admin-stats"><div class="glass-card summary-card"><span>TOTAL PENGGUNA</span><strong>${s.totalUsers ?? 0}</strong></div><div class="glass-card summary-card"><span>TOTAL BERKAS ENKRIPSI</span><strong>${s.totalFiles ?? 0}</strong></div><div class="glass-card summary-card"><span>TOTAL CIPHERTEXT</span><strong>${(Number(s.totalCiphertextBytes||0)/(1024*1024)).toFixed(1)} MB</strong></div><div class="glass-card summary-card"><span>PANJANG RANTAI HASH</span><strong class="good">${s.auditChainLength ?? 0} blok</strong></div></div>` : ''}
-    <div class="glass-card table-card"><div class="table-title"><h3>Daftar Akun Pengguna</h3></div><div class="table-scroll"><table class="data-table admin-table"><thead><tr><th>Username / Email</th><th>Peran (Role)</th><th>Alokasi Kuota</th><th>Status Akun</th><th class="text-right">Aksi Admin</th></tr></thead><tbody>${a.loading ? '<tr><td colspan="5" class="empty-state">Memuat daftar pengguna...</td></tr>' : a.users.length ? a.users.map(u=>`<tr><td><b>${esc(u.username)}</b><small class="table-subtext">${esc(u.email)}</small></td><td><span class="badge ${u.role==='admin'?'badge-rose':'badge-cyan'}">${esc((u.role||'').toUpperCase())}</span></td><td><b>${(Number(u.storage_quota_bytes)/(1024**3)).toFixed(1)} GB</b><small class="table-subtext">Terpakai: ${(Number(u.storage_used_bytes)/(1024**2)).toFixed(1)} MB</small></td><td><span class="badge ${u.is_active?'badge-emerald':'badge-rose'}">${u.is_active?'AKTIF':'DINONAKTIFKAN'}</span></td><td><div class="file-actions">${btn('admin-quota', `${icon('database',13)} Atur Kuota`, 'btn-secondary btn-sm', `data-id="${esc(u.id)}" data-quota="${(Number(u.storage_quota_bytes)/(1024**3)).toFixed(1)}"`)}${btn('admin-revoke', `${icon('lock',13)} Cabut Sesi`, 'btn-danger btn-sm', `data-id="${esc(u.id)}"`)}</div></td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">Belum ada data pengguna.</td></tr>'}</tbody></table></div></div>
+  const total = a.users.length;
+  const active = a.users.filter(u => !u.onboarding_pending && u.is_active).length;
+  const pending = a.users.filter(u => u.onboarding_pending).length;
+  const inactive = total - active - pending;
+  const allocated = a.users.reduce((sum, u) => sum + Math.max(0, Number(u.storage_quota_bytes) || 0), 0);
+  const used = a.users.reduce((sum, u) => sum + Math.max(0, Number(u.storage_used_bytes) || 0), 0);
+  const usedPercent = allocated ? Math.min(100, used / allocated * 100) : 0;
+  const usedPercentLabel = `${usedPercent.toLocaleString('id-ID', { maximumFractionDigits: 2 })}%`;
+  const activeWidth = total ? active / total * 640 : 0;
+  const pendingWidth = total ? pending / total * 640 : 0;
+  const inactiveWidth = total ? 640 - activeWidth - pendingWidth : 0;
+  const statusLabel = `Status akun: ${active} aktif, ${pending} menunggu aktivasi, ${inactive} nonaktif`;
+  const visible = adminVisibleUsers();
+  return `<div class="container page-container drive-dashboard admin-console"><div class="drive-page-heading admin-page-head"><div><h1>Konsol Admin</h1><p>Kelola akun, pantau kapasitas, dan periksa status sistem.</p></div><div class="drive-heading-actions">${btn('refresh-admin', `${icon('refresh',16)} Perbarui data`, 'btn-secondary btn-sm')}</div></div>
+    ${errorBox(a.error)}
+    <div class="drive-section-heading admin-section-heading"><h2>Ringkasan sistem</h2><span>Status akun dan penyimpanan</span></div>
+    <section class="admin-overview" aria-label="Ringkasan sistem">
+      <div class="admin-metric"><div class="admin-metric-copy"><strong>${total}</strong><span class="admin-metric-label">Total akun</span><small>Termasuk administrator</small></div><span class="admin-metric-icon" aria-hidden="true">${icon('users',22)}</span></div>
+      <div class="admin-metric"><div class="admin-metric-copy"><strong>${active}</strong><span class="admin-metric-label">Akun aktif</span><small>Siap digunakan</small></div><span class="admin-metric-icon is-green" aria-hidden="true">${icon('check',22)}</span></div>
+      <div class="admin-metric"><div class="admin-metric-copy"><strong>${pending}</strong><span class="admin-metric-label">Menunggu aktivasi</span><small>Perlu verifikasi email</small></div><span class="admin-metric-icon is-amber" aria-hidden="true">${icon('refresh',22)}</span></div>
+      <div class="admin-metric"><div class="admin-metric-copy"><strong>${inactive}</strong><span class="admin-metric-label">Akun nonaktif</span><small>Akses dibatasi</small></div><span class="admin-metric-icon is-slate" aria-hidden="true">${icon('lock',22)}</span></div>
+    </section>
+    <section class="admin-insights" aria-label="Status akun dan penyimpanan"><div class="admin-insight-card"><div class="admin-card-heading"><h2>Distribusi status akun</h2><span class="admin-card-total">${total} akun</span></div><svg class="admin-status-chart" viewBox="0 0 640 28" role="img" aria-label="${statusLabel}" preserveAspectRatio="none"><title>${statusLabel}</title><rect width="640" height="28" class="admin-chart-track"/><rect width="${activeWidth}" height="28" class="admin-chart-active"/><rect x="${activeWidth}" width="${pendingWidth}" height="28" class="admin-chart-pending"/><rect x="${activeWidth + pendingWidth}" width="${inactiveWidth}" height="28" class="admin-chart-inactive"/></svg><div class="admin-chart-legend"><span><i class="is-active"></i>Aktif <b>${active}</b></span><span><i class="is-pending"></i>Menunggu <b>${pending}</b></span><span><i class="is-inactive"></i>Nonaktif <b>${inactive}</b></span></div></div>
+      <div class="admin-insight-card"><div class="admin-card-heading"><h2>Kapasitas teralokasi</h2><span class="admin-card-total">${usedPercentLabel}</span></div><div class="admin-capacity-values"><strong>${bytes(used)}</strong><span>digunakan dari ${bytes(allocated)}</span></div><progress class="vault-progress admin-capacity-progress" max="100" value="${usedPercent}" aria-label="Pemakaian penyimpanan ${usedPercentLabel}"></progress><div class="admin-capacity-footer"><span>${Number(s?.totalFiles || 0)} berkas terenkripsi</span><span>${Number(s?.auditChainLength || 0)} catatan audit</span></div></div></section>
+    <section class="admin-create-card" aria-labelledby="admin-create-title"><div class="admin-create-intro"><span class="admin-create-icon">${icon('users',20)}</span><div><h2 id="admin-create-title">Buat akun pengguna</h2><p>Tautan aktivasi dikirim ke email. Pengguna membuat kata sandi sendiri sebelum login.</p></div></div><form data-form="admin-create-user" class="admin-create-form"><div class="input-group"><label class="input-label">Username</label><input class="input-control" name="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9_.-]+" placeholder="Nama pengguna" required autocomplete="off"></div><div class="input-group"><label class="input-label">Email pengguna</label><input class="input-control" name="email" type="email" placeholder="nama@perusahaan.com" required autocomplete="off"></div><button class="btn btn-primary" type="submit" ${a.creating?'disabled':''}>${a.creating?'Membuat akun...':`${icon('plus',16)} Buat akun`}</button></form></section>
+    <section class="admin-table-card" aria-labelledby="admin-users-title"><div class="drive-section-heading admin-table-heading"><h2 id="admin-users-title">Daftar akun pengguna</h2><span class="admin-result-count">${visible.length} dari ${total} akun</span></div><div class="admin-table-tools"><label class="admin-search-wrap">${icon('search',19)}<span class="sr-only">Cari username atau email</span><input id="admin-search" type="search" placeholder="Cari username atau email" value="${esc(a.search)}" autocomplete="off"></label><label class="admin-filter-wrap"><span>Status</span><select id="admin-status-filter" aria-label="Filter status akun"><option value="all" ${a.status==='all'?'selected':''}>Semua status</option><option value="active" ${a.status==='active'?'selected':''}>Aktif</option><option value="pending" ${a.status==='pending'?'selected':''}>Menunggu aktivasi</option><option value="inactive" ${a.status==='inactive'?'selected':''}>Nonaktif</option></select></label></div><div class="table-scroll"><table class="data-table admin-table"><thead><tr><th scope="col">Akun</th><th scope="col">Peran</th><th scope="col">Penyimpanan</th><th scope="col">Status</th><th scope="col">Tindakan</th></tr></thead><tbody>${a.loading ? '<tr><td colspan="5" class="empty-state">Memuat daftar pengguna...</td></tr>' : visible.length ? visible.map(adminUserRow).join('') : `<tr><td colspan="5" class="empty-state">${total ? 'Tidak ada akun yang sesuai dengan pencarian atau filter.' : 'Belum ada akun pengguna.'}</td></tr>`}</tbody></table></div></section>
   </div>`;
 }
 function modalShell(title, subtitle, content, width = '600px') {
@@ -432,8 +578,8 @@ function previewModalTemplate() {
 }
 function render() {
   applyTheme(state.theme);
-  const main = !state.user ? loginTemplate() : state.activeTab === 'audit' ? auditTemplate() : state.activeTab === 'admin' && state.user.role === 'admin' ? adminTemplate() : dashboardTemplate();
-  appRoot.innerHTML = `<div class="app-shell ${state.user ? 'drive-app-shell' : ''}">${headerTemplate()}${state.user ? `<div class="drive-app-body">${sidebarTemplate()}<main class="app-main">${main}</main></div>` : `<main class="app-main">${main}</main>${footerTemplate()}`}</div>`;
+  const main = state.activation ? activationTemplate() : !state.user ? loginTemplate() : state.user.role === 'admin' && state.activeTab === 'audit' ? auditTemplate() : state.user.role === 'admin' && state.activeTab === 'admin' ? adminTemplate() : dashboardTemplate();
+  appRoot.innerHTML = `<div class="app-shell ${state.user && !state.activation ? 'drive-app-shell' : ''}">${headerTemplate()}${state.user && !state.activation ? `<div class="drive-app-body">${sidebarTemplate()}<main class="app-main">${main}</main></div>` : `<main class="app-main">${main}</main>${footerTemplate()}`}</div>`;
   let modal = '';
   if (state.modal === 'unlock') modal = unlockModalTemplate();
   if (state.modal === 'upload') modal = uploadModalTemplate();
@@ -459,7 +605,7 @@ async function checkCurrentUser() {
   }
 }
 function loginSuccess(user) {
-  state.user = user; state.login = { ...state.login, mfaRequired:false, password:'', totpCode:'', mfaSecret:'', mfaOtpUri:'', secretCopied:false, error:'', notice:'' };
+  state.user = user; state.login = { ...state.login, onboardingStage:'', onboardingChallenge:'', onboardingPasswordToken:'', mfaRequired:false, password:'', totpCode:'', mfaSecret:'', mfaOtpUri:'', secretCopied:false, error:'', notice:'' };
   state.activeTab = 'files';
   setAppHistory('app', 'files');
   resetIdleTimer();
@@ -1005,16 +1151,10 @@ async function saveFileMetadata() {
   }catch(err){state.detailSaving=false;state.modalError=err.message||'Gagal memperbarui metadata.';render();}
 }
 async function fetchAudit() {
-  state.audit.loading=true;state.audit.integrity=null;state.audit.error='';render();
+  state.audit.loading=true;state.audit.error='';render();
   try{const result=await request('/audit');state.audit.logs=result.logs||[];}
   catch(err){state.audit.error=err.message||'Gagal memuat audit trail.';}
   finally{state.audit.loading=false;render();}
-}
-async function verifyAudit() {
-  state.audit.verifying=true;render();
-  try{const result=await request('/audit/verify');state.audit.integrity={verified:!!result.isValid,brokenIndex:result.brokenSequence??null,message:result.message};}
-  catch(err){state.audit.integrity={verified:false,brokenIndex:null,message:'Gagal memverifikasi rantai hash: '+err.message};}
-  finally{state.audit.verifying=false;render();}
 }
 async function fetchAdmin() {
   state.admin.loading=true;state.admin.error='';render();
@@ -1025,13 +1165,29 @@ async function fetchAdmin() {
 async function updateQuota(button) {
   const id=button.dataset.id;const current=button.dataset.quota;const input=prompt(`Masukkan kuota baru dalam GB (saat ini: ${current} GB):`,current);
   if(!input||Number.isNaN(Number(input))||Number(input)<=0)return;
-  try{await request(`/admin/users/${id}/quota`,{method:'PATCH',body:JSON.stringify({storageQuotaBytes:Number(input)*1024**3})});state.admin.success=`Kuota pengguna berhasil diperbarui menjadi ${input} GB.`;await fetchAdmin();state.admin.success=`Kuota pengguna berhasil diperbarui menjadi ${input} GB.`;render();}
+  try{await request(`/admin/users/${id}/quota`,{method:'PATCH',body:JSON.stringify({storageQuotaBytes:Number(input)*1024**3})});await fetchAdmin();showToast(`Kuota pengguna berhasil diperbarui menjadi ${input} GB.`);}
   catch(err){state.admin.error=err.message||'Gagal memperbarui kuota.';render();}
 }
 async function revokeSession(id) {
-  if(!confirm('Cabut seluruh sesi aktif pengguna ini seketika? Pengguna akan dipaksa logout.'))return;
-  try{await request(`/admin/users/${id}/revoke`,{method:'POST'});state.admin.success='Sesi aktif pengguna berhasil dicabut (Instant Revocation).';await fetchAdmin();state.admin.success='Sesi aktif pengguna berhasil dicabut (Instant Revocation).';render();}
-  catch(err){state.admin.error=err.message||'Gagal mencabut sesi.';render();}
+  if(!confirm('Cabut semua sesi dan nonaktifkan akun ini? Pengguna tidak dapat masuk atau beraktivitas sampai admin mengaktifkannya kembali. Akun dan berkas tetap tersimpan.'))return;
+  try{await request(`/admin/users/${id}/revoke`,{method:'POST'});await fetchAdmin();showToast('Akun dinonaktifkan dan semua sesi dicabut.');}
+  catch(err){state.admin.error=err.message||'Gagal menonaktifkan akun.';render();}
+}
+async function reactivateAccount(id) {
+  if(!confirm('Aktifkan kembali akun ini? Pengguna dapat masuk menggunakan kata sandi dan MFA.'))return;
+  try{await request(`/admin/users/${id}/reactivate`,{method:'POST'});await fetchAdmin();showToast('Akun diaktifkan kembali. Pengguna dapat masuk dengan sesi baru.');}
+  catch(err){state.admin.error=err.message||'Gagal mengaktifkan akun.';render();}
+}
+async function resendVerificationCode(id) {
+  try{await request(`/admin/users/${id}/resend-verification`,{method:'POST'});await fetchAdmin();showToast('Tautan aktivasi baru dikirim. Minta pengguna memeriksa Kotak Masuk dan Spam.');}
+  catch(err){state.admin.error=err.message||'Gagal mengirim ulang tautan aktivasi.';render();}
+}
+async function deleteAccount(id, username) {
+  const confirmation = prompt(`Hapus akun ${username} secara permanen beserta semua berkas dan foldernya? Tindakan ini tidak dapat dibatalkan.\n\nKetik username ${username} untuk konfirmasi:`);
+  if(confirmation === null)return;
+  if(confirmation !== username){showToast('Username konfirmasi tidak cocok. Akun tidak dihapus.','error');return;}
+  try{await request(`/admin/users/${id}`,{method:'DELETE',body:JSON.stringify({confirmUsername:username})});await fetchAdmin();showToast(`Akun ${username} dan seluruh data brankasnya berhasil dihapus.`);}
+  catch(err){state.admin.error=err.message||'Gagal menghapus akun.';render();}
 }
 
 // Delegated UI events keep the page framework-free while preserving every action.
@@ -1050,7 +1206,7 @@ document.addEventListener('click', async event => {
   if(action==='folder-open'){if(state.folders.some(folder=>folder.id===button.dataset.id)){state.currentFolderId=button.dataset.id;state.search='';state.selectedTag=null;setAppHistory('app','files');render();}return;}
   if(action==='delete-folder'){const folder=state.decryptedFolders.find(item=>item.id===button.dataset.id);if(!folder||!state.unlocked)return;if(!confirm(`Hapus folder kosong "${folder.decryptedFileName || 'Folder'}"?`))return;try{await request(`/folders/${folder.id}`,{method:'DELETE'});await fetchFiles();showToast('Folder berhasil dihapus.');}catch(err){showToast(err.message||'Folder gagal dihapus.','error');}return;}
   if(action==='file-layout'){state.fileLayout=button.dataset.layout;render();return;}
-  if(action==='tab'){state.activeTab=button.dataset.tab;setAppHistory('app',state.activeTab);render();if(state.activeTab==='files')fetchFiles();if(state.activeTab==='audit')fetchAudit();if(state.activeTab==='admin')fetchAdmin();return;}
+  if(action==='tab'){if(button.dataset.tab!=='files'&&state.user?.role!=='admin')return;state.activeTab=button.dataset.tab;setAppHistory('app',state.activeTab);render();if(state.activeTab==='files')fetchFiles();if(state.activeTab==='audit')fetchAudit();if(state.activeTab==='admin')fetchAdmin();return;}
   if(action==='logout'){logout();return;}
   if(action==='lock-vault'){toggleVaultLock();return;}
   if(action==='open-unlock'){openModal('unlock');return;}
@@ -1060,7 +1216,6 @@ document.addEventListener('click', async event => {
   if(action==='upload'){state.createMenuOpen=false;if(!state.unlocked){openModal('unlock');return;}openModal('upload');return;}
   if(action==='refresh-files'){fetchFiles();return;}
   if(action==='refresh-audit'){fetchAudit();return;}
-  if(action==='verify-audit'){verifyAudit();return;}
   if(action==='refresh-admin'){fetchAdmin();return;}
   if(action==='sort-direction'){state.sortAsc=!state.sortAsc;render();return;}
   if(action==='tag-filter'){state.selectedTag=button.dataset.tag||null;render();return;}
@@ -1068,7 +1223,8 @@ document.addEventListener('click', async event => {
   if(action==='download-file'){const file=state.decryptedFiles.find(f=>f.id===button.dataset.id)||state.files.find(f=>f.id===button.dataset.id);if(file)downloadFile(file);return;}
   if(action==='file-details'){const file=state.decryptedFiles.find(f=>f.id===button.dataset.id)||state.files.find(f=>f.id===button.dataset.id);if(file){state.selectedFile=file;state.detailEditing=false;state.detailName=file.decryptedFileName||'';state.detailTags=(file.tags||[]).join(', ');state.modalError='';state.modal='details';setAppHistory('app',state.activeTab,false,'details');render();}return;}
   if(action==='delete-file'){deleteFile(button.dataset.id);return;}
-  if(action==='toggle-register'){state.login.register=!state.login.register;state.login.error='';state.login.notice='';state.login.password='';render();return;}
+  if(action==='onboarding-back'){state.login.onboardingStage='';state.login.onboardingChallenge='';state.login.onboardingPasswordToken='';state.login.error='';state.login.password='';render();return;}
+  if(action==='activation-back'){state.activation=null;render();return;}
   if(action==='mfa-back'){if(history.state?.secureVaultApp&&history.state.view==='mfa'){history.back();return;}state.login.mfaRequired=false;state.login.mfaSetupRequired=false;state.login.mfaToken='';state.login.totpCode='';state.login.mfaSecret='';state.login.mfaOtpUri='';state.login.secretCopied=false;state.login.error='';state.login.notice='';render();return;}
   if(action==='copy-secret'){try{await navigator.clipboard.writeText(state.login.mfaSecret);state.login.secretCopied=true;render();}catch{state.login.error='Secret tidak dapat disalin otomatis. Salin secret yang ditampilkan secara manual.';render();}return;}
   if(action==='choose-file'){$('#upload-file')?.click();return;}
@@ -1078,6 +1234,9 @@ document.addEventListener('click', async event => {
   if(action==='detail-save'){saveFileMetadata();return;}
   if(action==='admin-quota'){updateQuota(button);return;}
   if(action==='admin-revoke'){revokeSession(button.dataset.id);return;}
+  if(action==='admin-reactivate'){reactivateAccount(button.dataset.id);return;}
+  if(action==='admin-resend-code'){resendVerificationCode(button.dataset.id);return;}
+  if(action==='admin-delete-user'){deleteAccount(button.dataset.id,button.dataset.username);return;}
 });
 document.addEventListener('keydown', event => {
   if(event.key==='Escape' && state.createMenuOpen){state.createMenuOpen=false;$('.drive-create-menu')?.remove();const trigger=$('.drive-new');trigger?.setAttribute('aria-expanded','false');trigger?.focus();}
@@ -1085,27 +1244,47 @@ document.addEventListener('keydown', event => {
 
 document.addEventListener('submit', async event => {
   const form=event.target;const type=form.dataset.form;if(!type)return;event.preventDefault();
+  if(type==='activate-account'){
+    const data=new FormData(form);const password=String(data.get('newPassword')||'');
+    if(password.length<12||password!==String(data.get('confirmPassword')||'')){state.activation.error='Kata sandi minimal 12 karakter dan konfirmasi harus sama.';render();return;}
+    const activation=state.activation;activation.loading=true;activation.error='';render();
+    try{await request('/auth/activate',{method:'POST',body:JSON.stringify({userId:activation.userId,token:activation.token,newPassword:password})});state.activation=null;state.login.username=activation.username;state.login.notice='Akun aktif. Masuk dengan kata sandi baru untuk melanjutkan ke OTP authenticator.';}
+    catch(err){activation.error=err.message||'Gagal mengaktifkan akun.';}
+    finally{activation.loading=false;render();}
+    return;
+  }
   if(type==='login'){
     const data=new FormData(form);
     state.login.username=String(data.get('username')||'').trim();
     state.login.password=String(data.get('password')||'');
-    state.login.email=String(data.get('email')||'').trim();
     state.login.error=''; state.login.notice='';
     if (!state.login.username) { state.login.error='Username wajib diisi.'; render(); return; }
     if (!state.login.password) { state.login.error='Kata sandi wajib diisi.'; render(); return; }
-    if (state.login.register && !state.login.email) { state.login.error='Email wajib diisi.'; render(); return; }
-    if (state.login.register && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.login.email)) { state.login.error='Format email tidak valid.'; render(); return; }
-    if (state.login.register && state.login.password.length < 12) { state.login.error='Kata sandi harus memiliki minimal 12 karakter.'; render(); return; }
     state.login.loading=true; render();
     try{
-      if(state.login.register){await request('/auth/register',{method:'POST',body:JSON.stringify({username:state.login.username,password:state.login.password,email:state.login.email})});state.login.register=false;state.login.password='';state.login.notice='Registrasi berhasil. Silakan masuk dan aktifkan TOTP menggunakan aplikasi authenticator.';}
-      else{
         const result=await request('/auth/login',{method:'POST',body:JSON.stringify({username:state.login.username,password:state.login.password})});
-        if(result.mfaRequired&&result.mfaToken){state.login.password='';state.login.mfaToken=result.mfaToken;state.login.mfaSetupRequired=Boolean(result.mfaSetupRequired);state.login.totpCode='';if(result.mfaSetupRequired){const setup=await request('/auth/mfa/setup',{method:'POST',body:JSON.stringify({mfaToken:result.mfaToken})});state.login.mfaSecret=setup.secret;state.login.mfaOtpUri=setup.otpauthUri||'';}else{state.login.mfaSecret='';state.login.mfaOtpUri='';}state.login.mfaRequired=true;setAppHistory('mfa');}
+        if(result.onboardingRequired&&result.passwordToken){state.login.password='';state.login.onboardingPasswordToken=result.passwordToken;state.login.onboardingStage='password';}
+        else if(result.onboardingRequired&&result.challenge){state.login.password='';state.login.onboardingChallenge=result.challenge;state.login.onboardingEmailHint=result.emailHint||'email terdaftar';state.login.onboardingStage='email';}
+        else if(result.mfaRequired&&result.mfaToken){state.login.password='';state.login.mfaToken=result.mfaToken;state.login.mfaSetupRequired=Boolean(result.mfaSetupRequired);state.login.totpCode='';if(result.mfaSetupRequired){const setup=await request('/auth/mfa/setup',{method:'POST',body:JSON.stringify({mfaToken:result.mfaToken})});state.login.mfaSecret=setup.secret;state.login.mfaOtpUri=setup.otpauthUri||'';}else{state.login.mfaSecret='';state.login.mfaOtpUri='';}state.login.mfaRequired=true;setAppHistory('mfa');}
         else if(result.token&&result.user)throw new Error('Respons autentikasi tidak lengkap. Silakan periksa konfigurasi server.');
         else throw new Error('Server tidak mengembalikan tantangan MFA yang valid.');
-      }
     }catch(err){state.login.error=err.message||'Gagal memproses autentikasi.';}
+    finally{state.login.loading=false;render();}
+  }
+  if(type==='onboarding-email'){
+    const code=String(new FormData(form).get('emailCode')||'').trim();
+    if(!/^[0-9]{8}$/.test(code)){state.login.error='Masukkan kode email 8 digit.';render();return;}
+    state.login.loading=true;state.login.error='';render();
+    try{const result=await request('/auth/onboarding/verify-email',{method:'POST',body:JSON.stringify({username:state.login.username,challenge:state.login.onboardingChallenge,code})});state.login.onboardingChallenge='';state.login.onboardingPasswordToken=result.passwordToken;state.login.onboardingStage='password';}
+    catch(err){state.login.error=err.message||'Kode email tidak valid.';}
+    finally{state.login.loading=false;render();}
+  }
+  if(type==='onboarding-password'){
+    const data=new FormData(form);const password=String(data.get('newPassword')||'');
+    if(password.length<12||password!==String(data.get('confirmPassword')||'')){state.login.error='Kata sandi minimal 12 karakter dan konfirmasi harus sama.';render();return;}
+    state.login.loading=true;state.login.error='';render();
+    try{await request('/auth/onboarding/set-password',{method:'POST',body:JSON.stringify({username:state.login.username,passwordToken:state.login.onboardingPasswordToken,newPassword:password})});state.login.onboardingPasswordToken='';state.login.onboardingStage='';state.login.notice='Akun aktif. Masuk dengan kata sandi baru, lalu siapkan authenticator.';}
+    catch(err){state.login.error=err.message||'Gagal mengaktifkan akun.';}
     finally{state.login.loading=false;render();}
   }
   if(type==='mfa'){
@@ -1119,6 +1298,13 @@ document.addEventListener('submit', async event => {
   if(type==='vault-init')handleInitializeVault(form);
   if(type==='change-pass')handleChangePassphrase(form);
   if(type==='create-folder')saveNewFolder(form);
+  if(type==='admin-create-user'){
+    const data=new FormData(form);const username=String(data.get('username')||'').trim();const email=String(data.get('email')||'').trim();
+    state.admin.creating=true;state.admin.error='';render();
+    try{await request('/admin/users',{method:'POST',body:JSON.stringify({username,email})});await fetchAdmin();showToast('Akun dibuat. Tautan aktivasi dikirim ke email pengguna.');}
+    catch(err){state.admin.error=err.message||'Gagal membuat akun.';}
+    finally{state.admin.creating=false;render();}
+  }
 });
 
 document.addEventListener('change', event => {
@@ -1127,8 +1313,14 @@ document.addEventListener('change', event => {
   if(event.target.id==='sort-by'){state.sortBy=event.target.value;render();return;}
   if(event.target.id==='audit-action'){state.audit.action=event.target.value;render();return;}
   if(event.target.id==='audit-status'){state.audit.status=event.target.value;render();return;}
+  if(event.target.id==='admin-status-filter'){state.admin.status=event.target.value;refreshAdminTable();return;}
 });
 document.addEventListener('input', event => {
+  if(event.target.id==='admin-search'){
+    state.admin.search=event.target.value;
+    refreshAdminTable();
+    return;
+  }
   if(event.target.id==='file-search'){
     const pos=event.target.selectionStart;state.search=event.target.value;
     const table=$('.files-table tbody');if(table){const rows=visibleFiles();const wrapper=$('.table-card');const oldScroll=wrapper?.scrollTop;render();const input=$('#file-search');input?.focus();input?.setSelectionRange(pos,pos);if(wrapper&&oldScroll)wrapper.scrollTop=oldScroll;}
@@ -1145,4 +1337,4 @@ window.addEventListener('storage',()=>{if(state.theme==='system')applyTheme('sys
 if(state.theme==='system')matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>applyTheme('system'));
 if (!history.state?.secureVaultApp) setAppHistory('login', 'files', true);
 applyTheme(state.theme);render();
-if(getAuthToken())checkCurrentUser();
+if(getAuthToken()&&!state.activation)checkCurrentUser();

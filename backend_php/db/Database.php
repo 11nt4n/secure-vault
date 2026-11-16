@@ -573,6 +573,24 @@ class Database
         $this->save();
     }
 
+    /** Remove an account and its owned vault data in the caller's transaction. */
+    public function deleteUserAndOwnedData(string $userId): void
+    {
+        $ownedIds = [];
+        foreach ($this->data['encrypted_files'] as $entry) {
+            if (($entry['owner_id'] ?? null) === $userId) $ownedIds[(string)$entry['id']] = true;
+        }
+        $this->data['file_chunks'] = array_values(array_filter($this->data['file_chunks'],
+            fn($chunk) => !isset($ownedIds[(string)($chunk['file_id'] ?? '')])));
+        $this->data['encrypted_files'] = array_values(array_filter($this->data['encrypted_files'],
+            fn($entry) => ($entry['owner_id'] ?? null) !== $userId));
+        $this->data['vault_profiles'] = array_values(array_filter($this->data['vault_profiles'],
+            fn($profile) => ($profile['user_id'] ?? null) !== $userId));
+        $this->data['users'] = array_values(array_filter($this->data['users'],
+            fn($user) => ($user['id'] ?? null) !== $userId));
+        $this->save();
+    }
+
     /** Fixed-window authentication throttle, guarded by the database lock. */
     public function isRateLimited(string $key, int $maxAttempts, int $windowSeconds): bool
     {

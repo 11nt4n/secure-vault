@@ -60,17 +60,44 @@ Frontend mengirim request API ke `http://127.0.0.1:5000/api`. Alamat ini dapat d
 
 Tidak ada akun demo, password bawaan, atau kode MFA universal.
 
-1. Daftarkan akun melalui halaman aplikasi menggunakan kata sandi minimal 12 karakter.
-2. Pada login pertama, pindai QR TOTP yang dibuat secara lokal di browser. Secret manual tetap tersedia sebagai opsi cadangan; tidak ada layanan QR pihak ketiga yang menerima secret.
-3. Untuk memberikan hak administrator, hentikan backend dan jalankan perintah CLI dari root proyek, lalu konfirmasi nama akun:
+1. Administrator membuka **Konsol Admin → Buat Akun Pengguna** dan mengisi username serta email. Sistem mengirim tautan aktivasi sekali pakai ke email tersebut. Admin tidak menerima atau mengirim kata sandi sementara.
+2. Pengguna membuka tautan aktivasi dan membuat kata sandi sendiri (minimal 12 karakter). Tautan berlaku 24 jam; admin dapat mengirim ulang tautan dari daftar pengguna jika kedaluwarsa. Tautan lama tidak berlaku setelah dikirim ulang.
+3. Akun aktif setelah kata sandi dibuat. Pengguna masuk dengan kata sandi baru, lalu menyiapkan TOTP melalui QR di browser.
+4. Untuk memberikan hak administrator pada akun yang sudah aktif, hentikan backend dan jalankan perintah CLI dari root proyek, lalu konfirmasi nama akun:
 
    ```cmd
    php backend_php/scripts/promote_admin.php USERNAME
    ```
 
-4. Jalankan kembali backend. Pendaftaran web selalu membuat akun `user`; peran administrator hanya dapat ditetapkan melalui operasi server-side yang tepercaya.
+5. Jalankan kembali backend. Pendaftaran publik ditolak oleh API; akun baru hanya dapat dibuat dari sesi administrator.
 
-Tantangan aktivasi/verifikasi MFA berlaku 20 menit. JWT sesi berlaku 8 jam sejak aktivitas API terautentikasi terakhir dan diputar ulang otomatis pada setiap request API. Pencabutan sesi oleh administrator tetap langsung berlaku. Brankas yang sudah terbuka tetap mengunci kunci di RAM setelah 15 menit tanpa aktivitas; ini tidak mengeluarkan pengguna dari sesi akun.
+### Konfigurasi email SMTP
+
+Untuk akun Gmail, aktifkan [Verifikasi 2 Langkah](https://support.google.com/accounts/answer/185839), buat **App Password** di pengaturan Akun Google, lalu jalankan `configure_gmail_smtp.bat` dari root proyek. Masukkan alamat Gmail pengirim dan App Password 16 karakter saat diminta. Skrip menyimpan konfigurasi di `var/secure-vault/smtp.json` (di luar web root dan diabaikan Git), memakai port 465 dengan SSL, kemudian mengirim email tes ke Gmail pengirim. Password Gmail biasa tidak digunakan. Setelah tes berhasil, buka aplikasi dan buat akun pengguna; tautan aktivasi akan dikirim ke email pengguna.
+
+Tautan aktivasi memakai `SECURE_VAULT_APP_URL` sebagai alamat aplikasi yang dapat dibuka user. Untuk pengembangan lokal, nilai bawaan `http://127.0.0.1:5173` hanya dapat dibuka pada komputer yang menjalankan frontend. Untuk deployment, atur `SECURE_VAULT_APP_URL` ke URL HTTPS publik aplikasi sebelum membuat akun.
+
+Jika tes gagal, pesan skrip menjelaskan apakah masalahnya konfigurasi, koneksi, atau penolakan login Gmail. Jalankan `Test-NetConnection smtp.gmail.com -Port 465` untuk memeriksa jalur jaringan dan periksa folder Spam untuk email tes. Konfigurasi file dibaca langsung pada setiap pengiriman, jadi backend tidak perlu dimulai ulang setelah menjalankan skrip.
+
+Sebelum administrator membuat akun, atur environment backend: `SECURE_VAULT_SMTP_HOST`, `SECURE_VAULT_SMTP_PORT`, `SECURE_VAULT_SMTP_ENCRYPTION` (`tls` untuk STARTTLS atau `ssl` untuk SMTPS), `SECURE_VAULT_SMTP_FROM`, `SECURE_VAULT_SMTP_USER`, dan `SECURE_VAULT_SMTP_PASSWORD`. Nilai host, pengguna, dan kata sandi diperoleh dari penyedia email Anda. Jangan menaruh kata sandi SMTP di repository. Tanpa konfigurasi ini, pembuatan akun baru ditolak karena kode verifikasi tidak dapat dikirim.
+
+Contoh di PowerShell sebelum menjalankan launcher (isi dengan nilai milik penyedia email):
+
+```powershell
+$env:SECURE_VAULT_SMTP_HOST = 'smtp.example.com'
+$env:SECURE_VAULT_SMTP_PORT = '587'
+$env:SECURE_VAULT_SMTP_ENCRYPTION = 'tls'
+$env:SECURE_VAULT_SMTP_FROM = 'vault@example.com'
+$env:SECURE_VAULT_SMTP_USER = 'vault@example.com'
+$env:SECURE_VAULT_SMTP_PASSWORD = '<kata sandi aplikasi SMTP>'
+.\start_all_php.bat
+```
+
+Mode `none` hanya diizinkan untuk server SMTP pada `localhost` saat pengujian.
+
+Tantangan aktivasi/verifikasi MFA berlaku 20 menit. JWT sesi berlaku 8 jam sejak aktivitas API terautentikasi terakhir dan diputar ulang otomatis pada setiap request API. Saat administrator mencabut sesi, akun juga dinonaktifkan sehingga login dan aktivitas API ditolak; akun serta berkas tetap tersimpan sampai administrator mengaktifkannya kembali. Token sesi lama tetap tidak berlaku setelah akun diaktifkan kembali. Brankas yang sudah terbuka tetap mengunci kunci di RAM setelah 15 menit tanpa aktivitas; ini tidak mengeluarkan pengguna dari sesi akun.
+
+Untuk menghapus akun secara permanen, administrator menonaktifkannya terlebih dahulu lalu memilih **Hapus Akun** dan mengetik username sebagai konfirmasi. Seluruh berkas, folder, chunk, dan profil brankas milik akun ikut dihapus; jejak audit tetap disimpan. Akun dengan peran admin selalu tampil di urutan atas dan tidak dapat diubah melalui konsol admin. Halaman dan API jejak audit hanya dapat diakses admin; aktivitas pengguna tetap dicatat.
 
 Untuk deployment, atur `JWT_SECRET` (acak, minimal 32 byte), `MFA_ENCRYPTION_KEY` (base64 dari 32 byte acak), dan `SECURE_VAULT_CORS_ORIGINS` sebagai environment variable yang dikelola deployment. Aktifkan `SECURE_VAULT_ENABLE_HSTS=1` **hanya** di belakang TLS yang tervalidasi. Jangan gunakan secret lokal pengembangan sebagai secret produksi. Data runtime berada di `var/secure-vault/` secara default.
 
