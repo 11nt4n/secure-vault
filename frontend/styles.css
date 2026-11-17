@@ -881,13 +881,12 @@ h1, h2, h3, h4, h5, h6 {
 .audit-console .audit-table-tools .admin-filter-wrap:first-child{flex:1;max-width:470px}
 .audit-console .audit-table-tools .admin-filter-wrap select{min-width:0;max-width:100%}
 .audit-console .audit-table-tools .admin-filter-wrap:first-child select{flex:1}
-.audit-console .audit-table{min-width:1040px;table-layout:fixed}
+.audit-console .audit-table{min-width:800px;table-layout:fixed}
 .audit-console .audit-table th:nth-child(1){width:75px}
 .audit-console .audit-table th:nth-child(2){width:160px}
-.audit-console .audit-table th:nth-child(3){width:260px}
+.audit-console .audit-table th:nth-child(3){width:265px}
 .audit-console .audit-table th:nth-child(4){width:195px}
 .audit-console .audit-table th:nth-child(5){width:105px}
-.audit-console .audit-table th:nth-child(6){width:245px}
 .audit-console .audit-table td{vertical-align:middle;overflow-wrap:anywhere}
 .audit-console .audit-sequence{color:var(--drive-muted);font-size:.75rem;font-weight:600}
 .audit-console .audit-action-name{display:block;color:var(--drive-ink);font-size:.79rem;font-weight:600;line-height:1.35}
@@ -896,8 +895,6 @@ h1, h2, h3, h4, h5, h6 {
 .audit-console .audit-status{display:inline-flex;align-items:center;justify-content:center;border-radius:8px;padding:4px 9px;font-size:.7rem;font-weight:600}
 .audit-console .audit-status.is-success{background:#e2f6ee;color:#0c9566}
 .audit-console .audit-status.is-failed{background:#fff2dc;color:#9a5c0d}
-.audit-console .hash-line{color:var(--drive-muted);font-size:.68rem;line-height:1.35}
-.audit-console .current-hash{color:var(--drive-ink)}
 [data-theme="dark"] .audit-console .audit-status.is-success{background:#174837;color:#84e1b7}
 [data-theme="dark"] .audit-console .audit-status.is-failed{background:#4a3920;color:#f4c57f}
 @media(max-width:900px){.audit-console .admin-overview{grid-template-columns:repeat(2,minmax(0,1fr))}}

@@ -486,8 +486,8 @@ class Database
     private function seed(): void
     {
         // A fresh installation starts with no users and no built-in credentials.
-        // The genesis entry uses the full v2 audit payload from the first record.
-        $genesisPrev = str_repeat('0', 64);
+        // The genesis entry uses the full v3 audit payload with SHA3-512 from the first record.
+        $genesisPrev = str_repeat('0', 128);
         $timestamp = gmdate('Y-m-d\TH:i:s.000\Z');
         $action = 'SYSTEM_GENESIS';
         $status = 'SUCCESS';
@@ -503,11 +503,11 @@ class Database
             'user_agent' => 'SecureVault/Bootstrap',
             'status' => $status,
             'details' => null,
-            'hash_version' => 2,
+            'hash_version' => 3,
             'previous_hash' => $genesisPrev,
         ];
         $payload = [
-            'version' => 2,
+            'version' => 3,
             'id' => $entry['id'],
             'sequence_number' => $entry['sequence_number'],
             'timestamp' => $entry['timestamp'],
@@ -522,7 +522,7 @@ class Database
         ];
         $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         if (!is_string($encoded)) throw new RuntimeException('Unable to create the audit genesis entry.');
-        $entry['current_hash'] = hash('sha256', $encoded);
+        $entry['current_hash'] = hash('sha3-512', $encoded);
         $this->data['audit_logs'][] = $entry;
     }
 

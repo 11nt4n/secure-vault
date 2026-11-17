@@ -151,7 +151,7 @@ def main() -> int:
                     "$db=Database::getInstance(); $id=Database::generateUuid(); $db->addUser(["
                     "'id'=>$id,'username'=>'stage2user',"
                     "'email'=>'stage2@example.test','password_hash'=>Database::hashPassword('Sufficiently-Long-Password-90'),"
-                    "'role'=>'user','is_active'=>true,'session_version'=>0,"
+                    "'role'=>'admin','is_active'=>true,'session_version'=>0,"
                     "'storage_quota_bytes'=>5368709120,'storage_used_bytes'=>0]); echo $id;"
                 )
                 seeded = subprocess.run([php, "-r", seed_php], cwd=PROJECT_ROOT, env=env,
@@ -387,7 +387,7 @@ def main() -> int:
                 setup_legacy = (
                     "require 'backend_php/config.php'; require 'backend_php/db/Database.php'; require 'backend_php/utils/Audit.php'; "
                     "$db=Database::getInstance(); $logs=$db->getAuditLogs(); $e=$logs[0]; "
-                    "unset($e['hash_version'],$e['details']); "
+                    "unset($e['hash_version'],$e['details']); $e['previous_hash']=str_repeat('0',64); "
                     "$e['current_hash']=Audit::computeLogHash($e['previous_hash'],$e['timestamp'],$e['user_id'],$e['action_type'],$e['file_id']??null,$e['status']); "
                     "$db->replaceAuditLogs([$e]);"
                 )

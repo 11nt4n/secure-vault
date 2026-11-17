@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -191,7 +192,7 @@ def main() -> int:
                     "users", "vault_profiles", "encrypted_files", "file_chunks",
                     "audit_logs", "auth_rate_limits",
                 ]
-                with sqlite3.connect(private / "data" / "secure-vault.sqlite") as connection:
+                with contextlib.closing(sqlite3.connect(private / "data" / "secure-vault.sqlite")) as connection:
                     persisted_records = []
                     for table in relational_tables:
                         rows = connection.execute(f"SELECT payload FROM {table}").fetchall()

@@ -49,8 +49,10 @@ require("forEachDecryptedChunk" in APP and "processedBytes !== fileSize" in APP,
         "Download harus memvalidasi panjang setiap chunk dan ukuran total.")
 require("file.arrayBuffer()" not in APP,
         "Upload tidak boleh memuat seluruh file sekaligus ke ArrayBuffer.")
-require('app.js?v=9' in INDEX and 'styles.css?v=9' in INDEX,
-        "Cache-buster frontend belum dinaikkan ke V9.")
+app_v = re.search(r"app\.js\?v=(\d+)", INDEX)
+css_v = re.search(r"styles\.css\?v=(\d+)", INDEX)
+require(bool(app_v and int(app_v.group(1)) >= 9 and css_v and int(css_v.group(1)) >= 9),
+        "Cache-buster frontend belum dinaikkan ke minimal V9.")
 
 if failures:
     print("FRONTEND SECURITY STATIC CHECK: FAIL")
