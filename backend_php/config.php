@@ -6,9 +6,13 @@ error_reporting(E_ALL);
 ini_set('display_errors', '0');
 umask(0077);
 
+require_once __DIR__ . '/utils/PersistentStorage.php';
+
 define('BASE_DIR', __DIR__);
 define('PROJECT_DIR', dirname(BASE_DIR));
-define('PRIVATE_DIR', PROJECT_DIR . DIRECTORY_SEPARATOR . 'var' . DIRECTORY_SEPARATOR . 'secure-vault');
+
+$persistentDir = PersistentStorage::resolvePersistentDirectory();
+define('PRIVATE_DIR', $persistentDir);
 
 $localSecretsFile = PRIVATE_DIR . DIRECTORY_SEPARATOR . 'secrets.php';
 $localSecrets = [];
@@ -17,6 +21,16 @@ if (is_file($localSecretsFile) && is_readable($localSecretsFile)) {
     if (is_array($loadedSecrets)) {
         $localSecrets = $loadedSecrets;
     }
+} elseif (!getenv('JWT_SECRET') || !getenv('MFA_ENCRYPTION_KEY')) {
+    PersistentStorage::ensureDirectory(PRIVATE_DIR, 0700);
+    $generatedSecrets = [
+        'JWT_SECRET' => bin2hex(random_bytes(32)),
+        'MFA_ENCRYPTION_KEY' => base64_encode(random_bytes(32)),
+    ];
+    $contents = "<?php\n// Generated local development secrets. Keep outside source control and web root.\nreturn " . var_export($generatedSecrets, true) . ";\n";
+    @file_put_contents($localSecretsFile, $contents, LOCK_EX);
+    @chmod($localSecretsFile, 0600);
+    $localSecrets = $generatedSecrets;
 }
 
 $jwtSecret = getenv('JWT_SECRET');

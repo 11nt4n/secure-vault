@@ -22,14 +22,23 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [1/3] Memastikan secret lokal dibuat di luar web root...
+echo [1/3] Mempersiapkan data persisten dan memulihkan instalasi lama...
+php backend_php\scripts\bootstrap_data.php
+if errorlevel 1 (
+  echo.
+  echo [PERHATIAN] Gagal menyiapkan penyimpanan data persisten.
+  echo Periksa pesan di atas sebelum melanjutkan.
+  pause
+  exit /b 1
+)
+
 php backend_php\scripts\init_local_secrets.php
 if errorlevel 1 (
   echo Gagal membuat secret lokal. Periksa konfigurasi PHP.
   pause
   exit /b 1
 )
-if not defined SECURE_VAULT_SMTP_HOST if not exist "var\secure-vault\smtp.json" (
+if not defined SECURE_VAULT_SMTP_HOST if not exist "%LOCALAPPDATA%\SecureVault\smtp.json" if not exist "var\secure-vault\smtp.json" (
   echo Gmail SMTP belum diatur. Sebelum membuat akun pengguna, jalankan configure_gmail_smtp.bat.
 )
 echo.
@@ -45,9 +54,15 @@ timeout /t 3 > nul
 start http://127.0.0.1:5173
 echo.
 echo ========================================================
-echo Tidak diperlukan Node.js, npm, React, TypeScript, atau Vite.
-echo Untuk membuat administrator, hentikan backend lalu jalankan:
-echo php backend_php\scripts\promote_admin.php USERNAME
+echo   Penyimpanan persisten aktif di:
+echo   %%LOCALAPPDATA%%\SecureVault
+echo   Ekstraksi ZIP GitHub baru tidak akan menghapus data Anda.
+echo.
+echo   Untuk membuat administrator awal (instalasi baru):
+echo   php backend_php\scripts\init_admin.php
+echo.
+echo   Untuk mempromosikan akun yang sudah ada:
+echo   php backend_php\scripts\promote_admin.php USERNAME
 echo ========================================================
 pause
 endlocal

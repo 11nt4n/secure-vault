@@ -25,6 +25,17 @@ class Database
         if (!extension_loaded('pdo_sqlite')) {
             throw new RuntimeException('Ekstensi PHP pdo_sqlite wajib diaktifkan untuk Secure Vault.');
         }
+        if (!is_file(DB_FILE)) {
+            if (!getenv('SECURE_VAULT_DATA_DIR')) {
+                $boot = PersistentStorage::bootstrap();
+                if ($boot['status'] === PersistentStorage::STATUS_AMBIGUOUS_CANDIDATES) {
+                    throw new RuntimeException('Ditemukan lebih dari satu kandidat database lama. Tetapkan SECURE_VAULT_SOURCE_DIR untuk memilih.');
+                }
+                if ($boot['status'] === PersistentStorage::STATUS_ERROR) {
+                    throw new RuntimeException('Gagal memulihkan database lama: ' . ($boot['message'] ?? 'Unknown error'));
+                }
+            }
+        }
         $this->pdo = new PDO('sqlite:' . DB_FILE, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $this->pdo->exec('PRAGMA journal_mode=WAL');
         $this->pdo->exec('PRAGMA synchronous=FULL');

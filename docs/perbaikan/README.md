@@ -11,6 +11,7 @@ Dokumen ini merupakan indeks dan pelacak progres pengerjaan perbaikan sistem Sec
 | **01** | **SHA3-512 pada Hash-Chain Jejak Audit** | Penggantian algoritma audit hash-chain ke SHA3-512 (128 hex, `hash_version = 3`), multi-version verification (V1/V2/V3), genesis enforcement, dan audit anchor compatibility. | **SELESAI (PASS)** | [01-perubahan-sha3-512-audit.md](01-perubahan-sha3-512-audit.md) |
 | **02** | **Kolom Pengguna & IP pada Jejak Audit** | Perbaikan tampilan kolom menjadi hanya menampilkan Alamat IP, penghapusan tampilan username dari tabel, penambahan fallback 'Tidak tersedia', dan penyesuaian label header menjadi 'Alamat IP'. | **SELESAI (PASS)** | [02-perbaikan-kolom-pengguna-ip.md](02-perbaikan-kolom-pengguna-ip.md) |
 | **03** | **Penghilangan Kolom Rantai Hash UI** | Penyesuaian antarmuka konsol audit untuk menyederhanakan tampilan dengan menghilangkan kolom teknis rantai hash, menghasilkan tabel tepat 5 kolom, penyesuaian colspan, dan optimasi lebar CSS. | **SELESAI (PASS)** | [03-penghapusan-kolom-rantai-hash.md](03-penghapusan-kolom-rantai-hash.md) |
+| **04** | **Penyimpanan Persisten & Pemulihan Otomatis** | Pemindahan penyimpanan operasional ke `%LOCALAPPDATA%\SecureVault\`, mekanisme bootstrap otomatis, deteksi dan pemulihan database lama secara WAL-aware, penanganan ambiguitas, dan initial admin setup aman. | **SELESAI (PASS)** | [04-persistent-local-database.md](04-persistent-local-database.md) |
 
 ---
 
@@ -82,3 +83,34 @@ Dokumen ini merupakan indeks dan pelacak progres pengerjaan perbaikan sistem Sec
   - `mfa_challenge_lock_test.php`: **PASS (Exit Code 0)**
 - **Integritas Hash-Chain**:
   - Algoritma hashing SHA3-512 V3, transisi multi-versi V1/V2/V3, anchor verification, dan deteksi tampering audit di backend tetap beroperasi penuh tanpa ada dampak negatif dari perubahan UI ini.
+
+---
+
+## Ringkasan Perbaikan 4: Persistent Local Storage & Automatic Recovery
+
+- **File Utama yang Dimodifikasi & Ditambahkan**:
+  - `backend_php/utils/PersistentStorage.php` (Modul inti penyimpanan persisten di `%LOCALAPPDATA%\SecureVault\`, bounded candidate scanning, validasi integritas SQLite, dan pemulihan WAL-aware via `VACUUM INTO`).
+  - `backend_php/scripts/bootstrap_data.php` (Skrip pre-flight launcher untuk mendeteksi instalasi aktif, auto-recovery, atau pelaporan ambiguitas).
+  - `backend_php/scripts/init_admin.php` (Inisialisasi administrator awal yang aman khusus instalasi baru tanpa default password, terkunci permanen setelah user pertama dibuat).
+  - `backend_php/config.php` (Resolusi dinamis `PRIVATE_DIR`, `DATA_DIR`, `STORAGE_DIR`, dan validasi isolasi web root).
+  - `backend_php/db/Database.php` (Fallback pemanggilan bootstrap otomatis jika database belum terbentuk).
+  - `backend_php/scripts/init_local_secrets.php` (Menyimpan `secrets.php` di lokasi persisten lokal).
+  - `configure_gmail_smtp.ps1` (Menyimpan `smtp.json` di lokasi persisten lokal).
+  - `start_all_php.bat` (Menjalankan bootstrap data persisten otomatis sebelum server PHP backend dan frontend berjalan).
+- **File Test Baru**:
+  - `backend_php/tests/persistent_storage_recovery_test.php` (Menguji 14 skenario ketat pemulihan, integritas WAL, upgrade project baru, pembacaan chunk storage, keabsahan audit V3, idempotensi, dan initial admin setup).
+  - `backend_php/tests/legacy_structure_simulation_test.php` (Menguji kompatibilitas struktur instalasi historis commit `bd43a46`, simulasi lintas folder Documents ke Downloads, dan skenario kegagalan tanpa fallback database kosong).
+- **Hasil Pengujian**:
+  - `persistent_storage_recovery_test.php`: **PASS (33/33 assertions, Exit Code 0)**
+  - `legacy_structure_simulation_test.php`: **PASS (40/40 checks, Exit Code 0)**
+  - `audit_sha3_compat_test.php`: **PASS (29/29 assertions, Exit Code 0)**
+  - `audit_ip_column_test.mjs`: **PASS (16/16 assertions, Exit Code 0)**
+  - `audit_table_columns_test.mjs`: **PASS (15/15 assertions, Exit Code 0)**
+  - `frontend_security_static.py`: **PASS (Exit Code 0)**
+  - `security_stage1.py`: **PASS (Exit Code 0)**
+  - `security_stage2.py`: **PASS (Exit Code 0)**
+  - `onboarding_integration.mjs`: **PASS (Exit Code 0)**
+  - `iteration5_sqlite_integration_test.py`: **PASS (Exit Code 0)**
+  - `mfa_challenge_lock_test.php`: **PASS (Exit Code 0)**
+- **Integritas Zero-Knowledge & Keamanan Data**:
+  - Data pengguna, berkas vault terenkripsi, kunci dekripsi MFA, dan basis data operasional tidak lagi tersimpan di dalam folder ekstraksi rilis ZIP, melainkan menetap aman di `%LOCALAPPDATA%\SecureVault\`. Pengguna dapat mengunduh dan mengekstrak versi ZIP GitHub terbaru kapan saja tanpa kehilangan akun atau data.

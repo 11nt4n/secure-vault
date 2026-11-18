@@ -1,6 +1,12 @@
 $ErrorActionPreference = 'Stop'
 $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$configDir = Join-Path $projectDir 'var\secure-vault'
+$configDir = if ($env:SECURE_VAULT_PERSISTENT_DIR) {
+    $env:SECURE_VAULT_PERSISTENT_DIR
+} elseif ($env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA 'SecureVault'
+} else {
+    Join-Path $projectDir 'var\secure-vault'
+}
 $configPath = Join-Path $configDir 'smtp.json'
 if (-not (Get-Command php -ErrorAction SilentlyContinue)) {
     Write-Error 'PHP CLI tidak ditemukan. Pasang PHP 8+ dan jalankan lagi.'
